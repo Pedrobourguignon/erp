@@ -152,7 +152,9 @@ const columns: ColumnDef<CustomerListItem>[] = [
     header: "Telefone",
     accessor: "phone",
     cell: (row) => (
-      <span className="text-sm">{maskPhone(row.phone)}</span>
+      <span className={row.phone ? "text-sm" : "text-sm text-muted-foreground"}>
+        {row.phone ? maskPhone(row.phone) : "—"}
+      </span>
     ),
   },
   {

@@ -28,7 +28,8 @@ export interface CustomerAddress {
 
 export interface CustomerDetail extends Customer {
   documentType: CustomerDocumentType;
-  phone: string;
+  /** Opcional no cadastro: a API devolve `null` quando não foi informado. */
+  phone: string | null;
   segment: CustomerSegment;
   totalOrders: number;
   totalSpent: number;
@@ -39,7 +40,8 @@ export interface CustomerDetail extends Customer {
 
 export interface CustomerListItem extends Customer {
   documentType: CustomerDocumentType;
-  phone: string;
+  /** Opcional no cadastro: a API devolve `null` quando não foi informado. */
+  phone: string | null;
   segment: CustomerSegment;
   totalOrders: number;
   totalSpent: number;

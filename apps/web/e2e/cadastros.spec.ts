@@ -240,4 +240,31 @@ test.describe("cadastros", () => {
 
     expect(weak.status).toBe(400);
   });
+
+  test("CLI-01: cliente sem telefone não derruba a listagem nem o detalhe", async ({
+    appPage,
+    apiClient,
+  }) => {
+    // Telefone é opcional no cadastro e a API devolve `null`. A máscara
+    // chamava `.replace` nele e um único cliente assim derrubava /clientes
+    // inteira — o `appPage` falha esta jornada em qualquer erro de JavaScript.
+    const suffix = stamp();
+    const created = await apiClient.post("/customers", {
+      name: `E2E Sem Telefone ${suffix}`,
+      documentType: "CPF",
+      document: makeCpf(),
+      email: `e2e.semfone.${suffix}@exemplo.com`,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const customer = (created.body as { data: { id: string; name: string; phone: string | null } }).data;
+    expect(customer.phone, "o cenário depende de o telefone vir nulo").toBeNull();
+
+    await appPage.goto("/clientes");
+    const row = appPage.getByRole("row", { name: new RegExp(customer.name) });
+    await expect(row).toBeVisible();
+    await expect(row.getByRole("cell", { name: "—" })).toBeVisible();
+
+    await appPage.goto(`/clientes/${customer.id}`);
+    await expect(appPage.getByText("Telefone não informado")).toBeVisible();
+  });
 });

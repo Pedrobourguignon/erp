@@ -206,7 +206,7 @@ function SummaryCard({ icon, label, value }: { icon: React.ReactNode; label: str
 
 // ─── Info tab ───────────────────────────────────────────────────────────
 
-function InfoTab({ customer }: { customer: { email: string; phone: string; createdAt: string } }) {
+function InfoTab({ customer }: { customer: { email: string; phone: string | null; createdAt: string } }) {
   return (
     <Card>
       <CardHeader>
@@ -220,7 +220,7 @@ function InfoTab({ customer }: { customer: { email: string; phone: string; creat
         </div>
         <div className="flex min-w-0 items-center gap-3">
           <Phone className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <TruncatedText text={maskPhone(customer.phone)} />
+          <TruncatedText text={maskPhone(customer.phone)} fallback="Telefone não informado" />
         </div>
         <div className="text-sm text-muted-foreground">
           Cliente desde {formatDateTime(customer.createdAt)}
