@@ -35,6 +35,10 @@ function createMockPrisma() {
       create: jest.fn(),
       updateMany: jest.fn(),
     },
+    accountsPayable: {
+      create: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     notification: {
       create: jest.fn(),
     },
@@ -648,6 +652,140 @@ describe('OrderEventsHandler', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    // Taxa e prazo de liquidação do método eram só cadastro: o débito entrava
+    // PAID, valor cheio, na hora, e a taxa da maquininha nunca aparecia.
+    describe('settlement days and fee of the payment method', () => {
+      beforeEach(() => {
+        jest.useFakeTimers().setSystemTime(new Date('2026-08-10T15:00:00.000Z'));
+      });
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      const debit = (overrides: Record<string, unknown> = {}) => ({
+        id: 'op-d',
+        amount: 449.9,
+        installments: 1,
+        financialAccountId: 'acc-1',
+        paymentMethodId: 'pm-d',
+        paymentCondition: null,
+        paymentMethod: {
+          id: 'pm-d',
+          name: 'Cartão de Débito',
+          type: 'DEBIT_CARD',
+          defaultAccountId: 'acc-1',
+          settlementDays: 1,
+          feePercentage: 1.5,
+          ...overrides,
+        },
+      });
+
+      const sale = () =>
+        handler.handleOrderCounterSale(
+          new OrderCounterSaleEvent(ORDER_ID, TENANT_ID, USER_ID, 449.9, counterItems),
+        );
+
+      it('should leave a debit sale PENDING until its settlement day', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([debit()]);
+
+        await sale();
+
+        const data = prisma.accountsReceivable.create.mock.calls[0][0].data;
+        expect(data.status).toBe('PENDING');
+        expect(data.paidAt).toBeNull();
+        // D+1 at midnight in America/Sao_Paulo
+        expect(data.dueDate).toEqual(new Date('2026-08-11T03:00:00.000Z'));
+      });
+
+      it('should NOT credit the account before the money settles', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([debit()]);
+
+        await sale();
+
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('should keep a debit with no settlement days PAID and credited', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          debit({ settlementDays: null }),
+        ]);
+
+        await sale();
+
+        expect(prisma.accountsReceivable.create.mock.calls[0][0].data.status).toBe('PAID');
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('should book the fee as a payable, due on the day the money settles', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([debit()]);
+
+        await sale();
+
+        // 449,90 × 1,5% = 6,7485 → 6,75
+        expect(prisma.accountsPayable.create).toHaveBeenCalledWith({
+          data: {
+            tenantId: TENANT_ID,
+            description: 'Taxa Cartão de Débito - PED-000001',
+            amount: 6.75,
+            status: 'PENDING',
+            dueDate: new Date('2026-08-11T03:00:00.000Z'),
+            paymentMethodId: 'pm-d',
+            metadata: {
+              kind: 'PAYMENT_FEE',
+              orderId: ORDER_ID,
+              orderPaymentId: 'op-d',
+              feePercentage: 1.5,
+            },
+          },
+        });
+      });
+
+      it('should round the fee in cents, not in floats', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          { ...debit({ feePercentage: 3.19, settlementDays: 30, type: 'CREDIT_CARD' }), amount: 699.9 },
+        ]);
+
+        await sale();
+
+        // 699,90 × 3,19% = 22,32681 → 22,33
+        expect(prisma.accountsPayable.create.mock.calls[0][0].data.amount).toBe(22.33);
+      });
+
+      it.each([[null], [0], [undefined]])(
+        'should not book a fee when the method has none (%s)',
+        async (fee) => {
+          prisma.orderPayment.findMany.mockResolvedValue([
+            debit({ feePercentage: fee }),
+          ]);
+
+          await sale();
+
+          expect(prisma.accountsPayable.create).not.toHaveBeenCalled();
+        },
+      );
+
+      it('should book the fee once for an installment sale, due with the first installment', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          {
+            ...debit({ type: 'CREDIT_CARD', name: 'Cartão de Crédito', feePercentage: 3, settlementDays: 30 }),
+            id: 'op-c',
+            amount: 699.9,
+            installments: 3,
+            paymentCondition: { id: 'c-1', daysBetweenInstallments: 30, entryPercentage: 0, type: 'INSTALLMENT' },
+          },
+        ]);
+
+        await sale();
+
+        expect(prisma.accountsPayable.create).toHaveBeenCalledTimes(1);
+        const payable = prisma.accountsPayable.create.mock.calls[0][0].data;
+        expect(payable.amount).toBe(21);
+        expect(payable.dueDate).toEqual(
+          prisma.accountsReceivable.create.mock.calls[0][0].data.dueDate,
+        );
+      });
+    });
+
     it('should NOT credit for non-immediate payment types (e.g. BOLETO)', async () => {
       prisma.orderPayment.findMany.mockResolvedValue([
         {
@@ -726,6 +864,23 @@ describe('OrderEventsHandler', () => {
           orderId: ORDER_ID,
           tenantId: TENANT_ID,
           status: { in: ['PENDING', 'PARTIALLY_PAID'] },
+        },
+        data: { status: 'CANCELLED' },
+      });
+    });
+
+    it('should cancel the pending payment-fee payables of the order', async () => {
+      const event = new OrderCancelledEvent(ORDER_ID, TENANT_ID, USER_ID, cancelledItems, reason, 'CONFIRMED');
+      await handler.handleOrderCancelled(event);
+
+      expect(prisma.accountsPayable.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: TENANT_ID,
+          status: { in: ['PENDING', 'PARTIALLY_PAID'] },
+          AND: [
+            { metadata: { path: ['kind'], equals: 'PAYMENT_FEE' } },
+            { metadata: { path: ['orderId'], equals: ORDER_ID } },
+          ],
         },
         data: { status: 'CANCELLED' },
       });

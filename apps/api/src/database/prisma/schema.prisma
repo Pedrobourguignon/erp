@@ -1256,9 +1256,10 @@ model PaymentMethod {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  receivables    AccountsReceivable[]
-  payables       AccountsPayable[]
-  orderPayments  OrderPayment[]
+  receivables       AccountsReceivable[]
+  payables          AccountsPayable[]
+  orderPayments     OrderPayment[]
+  paymentConditions PaymentCondition[]
 
   @@index([tenantId])
   @@map("payment_methods")
@@ -1282,6 +1283,10 @@ model PaymentCondition {
   updatedAt               DateTime             @updatedAt
 
   orderPayments           OrderPayment[]
+  // Sem vínculo nenhum, a condição aparece pra qualquer método que mostre
+  // condição (comportamento anterior à SCRUM-52) — o vínculo só passa a
+  // restringir quando o tenant explicitamente escolhe os métodos.
+  paymentMethods          PaymentMethod[]
 
   @@unique([tenantId, code])
   @@index([tenantId])

@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  BadRequestException,
   ConflictException,
   Logger,
 } from '@nestjs/common';
@@ -55,16 +56,22 @@ export class PaymentConditionsService {
         skip,
         take: limit,
         orderBy: buildPrismaOrderBy(sortBy, sortOrder),
+        include: { paymentMethods: { select: { id: true, name: true } } },
       }),
       this.prisma.paymentCondition.count({ where }),
     ]);
 
-    return buildPaginatedResponse(data, total, { page, limit, sortBy, sortOrder });
+    return buildPaginatedResponse(
+      data.map(withMethodIds),
+      total,
+      { page, limit, sortBy, sortOrder },
+    );
   }
 
   async findOne(tenantId: string, id: string) {
     const condition = await this.prisma.paymentCondition.findFirst({
       where: { id, tenantId },
+      include: { paymentMethods: { select: { id: true, name: true } } },
     });
 
     if (!condition) {
@@ -73,7 +80,30 @@ export class PaymentConditionsService {
       );
     }
 
-    return condition;
+    return withMethodIds(condition);
+  }
+
+  /**
+   * SCRUM-52: o vínculo só pode apontar para métodos do próprio tenant — sem
+   * isto, o id de outro tenant passaria despercebido e a condição pareceria
+   * vinculada sem nunca aparecer filtrada para ninguém.
+   */
+  private async assertMethodsBelongToTenant(
+    tenantId: string,
+    paymentMethodIds: string[],
+  ): Promise<void> {
+    if (paymentMethodIds.length === 0) return;
+
+    const found = await this.prisma.paymentMethod.findMany({
+      where: { id: { in: paymentMethodIds }, tenantId },
+      select: { id: true },
+    });
+
+    if (found.length !== new Set(paymentMethodIds).size) {
+      throw new BadRequestException(
+        'Um ou mais métodos de pagamento informados não existem para este tenant.',
+      );
+    }
   }
 
   async create(tenantId: string, dto: CreatePaymentConditionDto) {
@@ -88,6 +118,9 @@ export class PaymentConditionsService {
       );
     }
 
+    const methodIds = dto.paymentMethodIds ?? [];
+    await this.assertMethodsBelongToTenant(tenantId, methodIds);
+
     const condition = await this.prisma.paymentCondition.create({
       data: {
         tenantId,
@@ -98,14 +131,16 @@ export class PaymentConditionsService {
         daysBetweenInstallments: dto.daysBetweenInstallments ?? 0,
         entryPercentage: dto.entryPercentage ?? 0,
         isActive: dto.isActive ?? true,
+        paymentMethods: { connect: methodIds.map((id) => ({ id })) },
       },
+      include: { paymentMethods: { select: { id: true, name: true } } },
     });
 
     this.logger.log(
       `Payment condition created: ${condition.name} (${condition.id}) for tenant ${tenantId}`,
     );
 
-    return condition;
+    return withMethodIds(condition);
   }
 
   async update(tenantId: string, id: string, dto: UpdatePaymentConditionDto) {
@@ -132,6 +167,10 @@ export class PaymentConditionsService {
       }
     }
 
+    if (dto.paymentMethodIds !== undefined) {
+      await this.assertMethodsBelongToTenant(tenantId, dto.paymentMethodIds);
+    }
+
     const updated = await this.prisma.paymentCondition.update({
       where: { id },
       data: {
@@ -142,14 +181,20 @@ export class PaymentConditionsService {
         ...(dto.daysBetweenInstallments !== undefined && { daysBetweenInstallments: dto.daysBetweenInstallments }),
         ...(dto.entryPercentage !== undefined && { entryPercentage: dto.entryPercentage }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+        // `set` replaces the whole link list — omitting the field leaves the
+        // existing links untouched (checked above), sending `[]` clears them.
+        ...(dto.paymentMethodIds !== undefined && {
+          paymentMethods: { set: dto.paymentMethodIds.map((mid) => ({ id: mid })) },
+        }),
       } as Prisma.PaymentConditionUncheckedUpdateInput,
+      include: { paymentMethods: { select: { id: true, name: true } } },
     });
 
     this.logger.log(
       `Payment condition updated: ${updated.name} (${updated.id}) for tenant ${tenantId}`,
     );
 
-    return updated;
+    return withMethodIds(updated);
   }
 
   async remove(tenantId: string, id: string) {
@@ -175,4 +220,27 @@ export class PaymentConditionsService {
 
     return { success: true, message: 'Payment condition deactivated' };
   }
+}
+
+/**
+ * Flattens the included relation into the id list the frontend filters by.
+ *
+ * `entryPercentage` é `Decimal` no Prisma e sai como **string** no JSON
+ * ("0", "50.5"). O contrato do frontend declara `number`, e o formulário de
+ * edição recusava o valor calado: o campo Entrada só aparece no tipo
+ * "Entrada + Parcelas", então em qualquer outro tipo o erro ficava invisível
+ * e o Salvar só emitia o toast de campo inválido. Normaliza aqui, na
+ * fronteira, para o JSON bater com o tipo declarado.
+ */
+function withMethodIds<
+  T extends {
+    paymentMethods: { id: string; name: string }[];
+    entryPercentage: Prisma.Decimal;
+  },
+>(condition: T) {
+  return {
+    ...condition,
+    entryPercentage: Number(condition.entryPercentage),
+    paymentMethodIds: condition.paymentMethods.map((m) => m.id),
+  };
 }

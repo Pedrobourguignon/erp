@@ -289,7 +289,7 @@ export default function ProductsListPage() {
           <Can permission="products:create">
             <Button variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="mr-2 h-4 w-4" />
-              Importar CSV
+              Importar
             </Button>
             <Button onClick={() => router.push("/estoque/produtos/novo")}>
               <Plus className="mr-2 h-4 w-4" />
@@ -304,7 +304,7 @@ export default function ProductsListPage() {
         open={importOpen}
         onOpenChange={setImportOpen}
         domain="products"
-        title="Importar produtos via CSV"
+        title="Importar produtos"
         onCompleted={() =>
           queryClient.invalidateQueries({ queryKey: productKeys.lists() })
         }

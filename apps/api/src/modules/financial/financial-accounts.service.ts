@@ -339,56 +339,17 @@ export class FinancialAccountsService {
     // cheque especial), mas só com confirmação explícita de quem transfere.
     assertCanGoNegative(from, amount, dto.allowNegativeBalance);
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const source = await tx.financialAccount.update({
-        where: { id: from.id },
-        data: { balance: { decrement: amount } },
-        select: { balance: true },
-      });
-
-      const destination = await tx.financialAccount.update({
-        where: { id: to.id },
-        data: { balance: { increment: amount } },
-        select: { balance: true },
-      });
-
-      const debit = await tx.financialTransaction.create({
-        data: {
-          tenantId,
-          accountId: from.id,
-          type: 'DEBIT',
-          amount,
-          balanceAfter: source.balance,
-          description,
-          referenceType: 'transfer',
-          referenceId: transferId,
-          metadata: { transferId, direction: 'out', counterpartyAccountId: to.id },
-          createdAt: when,
-        },
-      });
-
-      const credit = await tx.financialTransaction.create({
-        data: {
-          tenantId,
-          accountId: to.id,
-          type: 'CREDIT',
-          amount,
-          balanceAfter: destination.balance,
-          description,
-          referenceType: 'transfer',
-          referenceId: transferId,
-          metadata: { transferId, direction: 'in', counterpartyAccountId: from.id },
-          createdAt: when,
-        },
-      });
-
-      return {
-        sourceBalance: source.balance,
-        destinationBalance: destination.balance,
-        debit,
-        credit,
-      };
-    });
+    const result = await this.prisma.$transaction((tx) =>
+      applyTransfer(tx, {
+        tenantId,
+        from,
+        to,
+        amount,
+        description,
+        when,
+        transferId,
+      }),
+    );
 
     this.logger.log(
       `Transfer ${transferId}: ${amount} from ${from.id} to ${to.id} (tenant ${tenantId})`,
@@ -407,6 +368,80 @@ export class FinancialAccountsService {
       creditTransactionId: result.credit.id,
     };
   }
+}
+
+
+/**
+ * As duas pernas de uma transferência, dentro de uma transação já aberta.
+ *
+ * O fechamento de caixa precisa mover o dinheiro da gaveta para o banco/cofre
+ * na *mesma* transação em que fecha a sessão: uma segunda chamada poderia
+ * falhar com o caixa já fechado, e o dinheiro ficaria contado em dois lugares.
+ * Por isso a mecânica mora aqui fora do serviço, e não dentro do `$transaction`
+ * de `transfer()`.
+ */
+export async function applyTransfer(
+  tx: Prisma.TransactionClient,
+  input: {
+    tenantId: string;
+    from: { id: string; name: string };
+    to: { id: string; name: string };
+    amount: number;
+    description: string;
+    when: Date;
+    transferId: string;
+  },
+) {
+  const { tenantId, from, to, amount, description, when, transferId } = input;
+
+  const source = await tx.financialAccount.update({
+    where: { id: from.id },
+    data: { balance: { decrement: amount } },
+    select: { balance: true },
+  });
+
+  const destination = await tx.financialAccount.update({
+    where: { id: to.id },
+    data: { balance: { increment: amount } },
+    select: { balance: true },
+  });
+
+  const debit = await tx.financialTransaction.create({
+    data: {
+      tenantId,
+      accountId: from.id,
+      type: 'DEBIT',
+      amount,
+      balanceAfter: source.balance,
+      description,
+      referenceType: 'transfer',
+      referenceId: transferId,
+      metadata: { transferId, direction: 'out', counterpartyAccountId: to.id },
+      createdAt: when,
+    },
+  });
+
+  const credit = await tx.financialTransaction.create({
+    data: {
+      tenantId,
+      accountId: to.id,
+      type: 'CREDIT',
+      amount,
+      balanceAfter: destination.balance,
+      description,
+      referenceType: 'transfer',
+      referenceId: transferId,
+      metadata: { transferId, direction: 'in', counterpartyAccountId: from.id },
+      createdAt: when,
+    },
+  });
+
+  return {
+    sourceBalance: source.balance,
+    destinationBalance: destination.balance,
+    debit,
+    credit,
+  };
 }
 
 /**

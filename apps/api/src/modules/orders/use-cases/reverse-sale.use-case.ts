@@ -56,6 +56,13 @@ export class ReverseSaleUseCase {
     this.assertReversible(order);
     await this.assertCashSessionStillOpen(tenantId, order);
 
+    // O estorno registra a obrigação e para por aí. Quem move dinheiro é a
+    // baixa do título em /financeiro/lancamentos, onde o operador escolhe de
+    // qual conta ele sai — e é lá que a gaveta é debitada, se a conta escolhida
+    // for a de um caixa aberto. Tirar da gaveta aqui adiantava um pagamento que
+    // ainda não foi decidido: uma venda no PIX (que entrou no Santander) saía do
+    // caixa e o deixava em −R$ 299,90.
+
     const warehouse = await this.prisma.warehouse.findFirst({
       where: { tenantId, isActive: true },
       orderBy: { isDefault: 'desc' },
@@ -97,6 +104,21 @@ export class ReverseSaleUseCase {
         data: { status: 'CANCELLED' },
       });
 
+      // The fee the acquirer would have charged on this sale is no longer owed.
+      // A fee already paid stays: it was a real cost, and the reversal does not
+      // give it back.
+      await tx.accountsPayable.updateMany({
+        where: {
+          tenantId,
+          status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          AND: [
+            { metadata: { path: ['kind'], equals: 'PAYMENT_FEE' } },
+            { metadata: { path: ['orderId'], equals: orderId } },
+          ],
+        },
+        data: { status: 'CANCELLED' },
+      });
+
       let payableId: string | null = null;
       if (refundedAmount > 0) {
         const payable = await tx.accountsPayable.create({
@@ -112,23 +134,9 @@ export class ReverseSaleUseCase {
         });
         payableId = payable.id;
 
-        // The money physically leaves the drawer of the session that took it.
-        if (order.cashRegisterSessionId) {
-          await tx.cashRegisterMovement.create({
-            data: {
-              tenantId,
-              sessionId: order.cashRegisterSessionId,
-              type: 'WITHDRAW',
-              amount: refundedAmount,
-              reason: `Estorno da venda ${order.orderNumber}: ${reason}`.slice(
-                0,
-                255,
-              ),
-              performedById: userId,
-            },
-          });
-        }
       }
+
+
 
       const updated = await tx.order.update({
         where: { id: orderId },
@@ -159,7 +167,6 @@ export class ReverseSaleUseCase {
       returnedItems: order.items.length,
       refundedAmount,
       payableId: result.payableId,
-      cashWithdrawn: refundedAmount > 0 && !!order.cashRegisterSessionId,
     };
   }
 

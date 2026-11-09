@@ -41,6 +41,7 @@ import {
   type PaymentCondition,
   type PaymentConditionType,
 } from "@/hooks/use-payment-conditions";
+import { usePaymentMethods } from "@/hooks/use-payment-methods";
 import { getApiErrorMessage } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
@@ -85,11 +86,15 @@ const conditionSchema = z.object({
     .min(0, "O intervalo não pode ser negativo")
     .max(365, "O intervalo máximo é 365 dias")
     .default(30),
-  entryPercentage: z
+  // A API devolve `entryPercentage` de um campo Decimal; `coerce` garante que
+  // um valor numérico em string nunca derrube o submit por um campo que só
+  // aparece no tipo "Entrada + Parcelas" — erro invisível, toast sem causa.
+  entryPercentage: z.coerce
     .number()
     .min(0, "A entrada não pode ser negativa")
     .max(100, "A entrada não pode passar de 100% do valor")
     .default(0),
+  paymentMethodIds: z.array(z.string()).default([]),
 });
 
 type ConditionFormValues = z.infer<typeof conditionSchema>;
@@ -252,6 +257,7 @@ function ConditionsTable({
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Nome</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Código</th>
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Tipo</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Métodos vinculados</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Parcelas</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Dias</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Entrada %</th>
@@ -272,8 +278,22 @@ function ConditionsTable({
                       {TYPE_LABELS[c.type]}
                     </Badge>
                   </td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {c.paymentMethods && c.paymentMethods.length > 0 ? (
+                      <TruncatedText
+                        text={c.paymentMethods.map((m) => m.name).join(", ")}
+                        className="max-w-[28ch]"
+                      />
+                    ) : (
+                      <span className="text-xs">Todos os métodos</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center">{c.installments}</td>
-                  <td className="px-4 py-3 text-center">{c.daysBetweenInstallments}</td>
+                  <td className="px-4 py-3 text-center">
+                    {/* Com uma só parcela não há intervalo: o "30" era o
+                        default do formulário, não uma regra da condição. */}
+                    {c.installments > 1 ? c.daysBetweenInstallments : "—"}
+                  </td>
                   <td className="px-4 py-3 text-center">{c.entryPercentage}%</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -308,6 +328,8 @@ function ConditionFormDialog({
 }) {
   const createMutation = useCreatePaymentCondition();
   const updateMutation = useUpdatePaymentCondition();
+  const { data: methodsResp } = usePaymentMethods({ isActive: true, limit: 100 });
+  const methods = methodsResp?.data ?? [];
   const { addToast } = useToast();
 
   const {
@@ -327,6 +349,7 @@ function ConditionFormDialog({
           installments: editing.installments,
           daysBetweenInstallments: editing.daysBetweenInstallments,
           entryPercentage: editing.entryPercentage,
+          paymentMethodIds: editing.paymentMethodIds,
         }
       : {
           name: "",
@@ -335,6 +358,7 @@ function ConditionFormDialog({
           installments: 1,
           daysBetweenInstallments: 30,
           entryPercentage: 0,
+          paymentMethodIds: [],
         },
   });
 
@@ -353,6 +377,7 @@ function ConditionFormDialog({
               installments: editing.installments,
               daysBetweenInstallments: editing.daysBetweenInstallments,
               entryPercentage: editing.entryPercentage,
+              paymentMethodIds: editing.paymentMethodIds,
             }
           : {
               name: "",
@@ -361,6 +386,7 @@ function ConditionFormDialog({
               installments: 1,
               daysBetweenInstallments: 30,
               entryPercentage: 0,
+              paymentMethodIds: [],
             }
       );
     }
@@ -483,6 +509,48 @@ function ConditionFormDialog({
               />
               {errors.entryPercentage ? <p className="text-xs text-destructive">{errors.entryPercentage.message}</p> : null}
             </div> : null}
+
+          {/* SCRUM-52: sem nenhum marcado, a condição continua aparecendo pra
+              qualquer método que mostre condição — igual ao comportamento de
+              antes. Marcar restringe a tela de venda a só esses métodos. */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Métodos de pagamento vinculados</label>
+            <p className="text-xs text-muted-foreground">
+              Nenhum marcado: a condição aparece para qualquer método. Marcando um ou
+              mais, ela só aparece para eles na tela de venda.
+            </p>
+            <Controller
+              name="paymentMethodIds"
+              control={control}
+              render={({ field }) => (
+                <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2">
+                  {methods.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Nenhum método de pagamento ativo cadastrado.
+                    </p>
+                  ) : (
+                    methods.map((m) => (
+                      <label key={m.id} className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-input"
+                          checked={field.value.includes(m.id)}
+                          onChange={(e) => {
+                            field.onChange(
+                              e.target.checked
+                                ? [...field.value, m.id]
+                                : field.value.filter((id) => id !== m.id)
+                            );
+                          }}
+                        />
+                        <TruncatedText text={m.name} className="max-w-[20ch]" />
+                      </label>
+                    ))
+                  )}
+                </div>
+              )}
+            />
+          </div>
 
           {/* Preview */}
           <InstallmentPreview

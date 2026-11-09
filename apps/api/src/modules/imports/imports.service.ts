@@ -1,14 +1,26 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { ImportType } from '@prisma/client';
+import { Queue } from 'bullmq';
+
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { StorageService, UploadedFileLike } from '../storage/storage.service';
 
 export const IMPORT_QUEUE = 'imports';
 export const PROCESS_IMPORT_JOB = 'process-import';
 
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const MAX_CSV_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * multer decodes the multipart file name as latin1, so "Exportação.xlsx" arrives
+ * as "ExportaÃ§Ã£o.xlsx". Undo it when the bytes really are UTF-8; a name that
+ * was already right does not survive the round trip, so it is left alone.
+ */
+function repairFileName(name: string): string {
+  const repaired = Buffer.from(name, 'latin1').toString('utf8');
+  return repaired.includes('\uFFFD') ? name : repaired;
+}
 
 @Injectable()
 export class ImportsService {
@@ -30,22 +42,30 @@ export class ImportsService {
     if (!file) {
       throw new BadRequestException('Nenhum arquivo enviado');
     }
+    const originalName = repairFileName(file.originalname);
+    const name = originalName.toLowerCase();
     const isCsv =
       file.mimetype.includes('csv') ||
       file.mimetype === 'application/vnd.ms-excel' ||
-      file.originalname.toLowerCase().endsWith('.csv');
-    if (!isCsv) {
+      name.endsWith('.csv');
+    // Browsers often send .xlsx as application/octet-stream: trust the extension.
+    const isSpreadsheet = name.endsWith('.xlsx');
+    if (type === 'PRODUCTS') {
+      if (!isCsv && !isSpreadsheet) {
+        throw new BadRequestException('O arquivo deve ser um CSV ou uma planilha do Excel (.xlsx)');
+      }
+    } else if (!isCsv) {
       throw new BadRequestException('O arquivo deve ser um CSV');
     }
     if (file.size > MAX_CSV_BYTES) {
       throw new BadRequestException('O arquivo deve ter no máximo 10 MB');
     }
 
-    const objectName = `imports/${tenantId}/${type.toLowerCase()}/${Date.now()}-${file.originalname}`;
+    const objectName = `imports/${tenantId}/${type.toLowerCase()}/${Date.now()}-${originalName}`;
     const stored = await this.storage.uploadBuffer(
       objectName,
       file.buffer,
-      file.mimetype || 'text/csv',
+      file.mimetype || (isSpreadsheet ? XLSX_MIME : 'text/csv'),
     );
 
     const job = await this.prisma.importJob.create({
@@ -53,7 +73,7 @@ export class ImportsService {
         tenantId,
         type,
         status: 'PENDING',
-        fileName: file.originalname,
+        fileName: originalName,
         fileKey: stored.key,
         createdBy: userId,
       },

@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsBoolean,
+  IsArray,
   Min,
   Max,
   MaxLength,
@@ -51,4 +52,14 @@ export class CreatePaymentConditionDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Métodos de pagamento a que esta condição fica restrita. Vazio ou omitido: a condição aparece para qualquer método que mostre condição.',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  paymentMethodIds?: string[];
 }

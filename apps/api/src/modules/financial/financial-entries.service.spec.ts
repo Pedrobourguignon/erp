@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { FinancialEntriesService } from './financial-entries.service';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { CashRegistersService } from '../cash-registers/cash-registers.service';
 
 const TENANT_A = 'tenant-aaa-111';
 const TENANT_B = 'tenant-bbb-222';
@@ -45,15 +46,19 @@ describe('FinancialEntriesService', () => {
   let service: FinancialEntriesService;
   let prisma: ReturnType<typeof createMockPrisma>;
   let mockTx: ReturnType<typeof createMockTx>;
+  let cashRegisters: { mirrorSettlementInDrawer: jest.Mock };
 
   beforeEach(async () => {
     mockTx = createMockTx();
     prisma = createMockPrisma(mockTx);
 
+    cashRegisters = { mirrorSettlementInDrawer: jest.fn().mockResolvedValue(null) };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FinancialEntriesService,
         { provide: PrismaService, useValue: prisma },
+        { provide: CashRegistersService, useValue: cashRegisters },
       ],
     }).compile();
 
@@ -819,6 +824,80 @@ describe('FinancialEntriesService', () => {
           where: expect.objectContaining({ tenantId: TENANT_B }),
         }),
       );
+    });
+  });
+
+  // ─── Despesa paga pela conta do caixa sai da gaveta ─────────────────────
+
+  describe('lançamento à vista pela conta de um caixa', () => {
+    // Pagar a conta de luz pela conta do caixa tira dinheiro da gaveta. Sem o
+    // movimento, o fechamento seguia esperando a nota que já tinha saído.
+    beforeEach(() => {
+      prisma.financialAccount.findFirst.mockResolvedValue({ id: 'acc-1' });
+      mockTx.financialAccount.update.mockResolvedValue({ balance: 300 });
+      mockTx.financialTransaction.create.mockResolvedValue({ id: 'ft-1' });
+      prisma.accountsPayable.create.mockResolvedValue({ id: 'ap-1' });
+    });
+
+    it('espelha a despesa como sangria na gaveta', async () => {
+      await service.create(
+        TENANT_A,
+        {
+          type: 'EXPENSE',
+          description: 'Conta de luz',
+          amount: 120,
+          date: '2026-08-19',
+          accountId: 'acc-1',
+        } as never,
+        'user-1',
+      );
+
+      expect(cashRegisters.mirrorSettlementInDrawer).toHaveBeenCalledWith(
+        mockTx,
+        expect.objectContaining({
+          accountId: 'acc-1',
+          direction: 'out',
+          amount: 120,
+          userId: 'user-1',
+        }),
+      );
+    });
+
+    it('espelha uma receita como suprimento', async () => {
+      await service.create(
+        TENANT_A,
+        {
+          type: 'REVENUE',
+          description: 'Aporte do sócio',
+          amount: 500,
+          date: '2026-08-19',
+          accountId: 'acc-1',
+        } as never,
+        'user-1',
+      );
+
+      expect(cashRegisters.mirrorSettlementInDrawer).toHaveBeenCalledWith(
+        mockTx,
+        expect.objectContaining({ direction: 'in', amount: 500 }),
+      );
+    });
+
+    it('não reflete nada num título a prazo — ali o dinheiro não se move ainda', async () => {
+      await service.create(
+        TENANT_A,
+        {
+          type: 'EXPENSE',
+          description: 'Fornecedor',
+          amount: 300,
+          date: '2026-08-19',
+          dueDate: '2026-09-19',
+          paid: false,
+          accountId: 'acc-1',
+        } as never,
+        'user-1',
+      );
+
+      expect(cashRegisters.mirrorSettlementInDrawer).not.toHaveBeenCalled();
     });
   });
 });

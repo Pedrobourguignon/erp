@@ -23,6 +23,12 @@ export interface PaymentCondition {
   daysBetweenInstallments: number;
   entryPercentage: number;
   isActive: boolean;
+  /**
+   * SCRUM-52: métodos a que esta condição fica restrita. Vazio = aparece para
+   * qualquer método que mostre condição (comportamento anterior).
+   */
+  paymentMethodIds: string[];
+  paymentMethods?: { id: string; name: string }[];
 }
 
 export interface CreatePaymentConditionPayload {
@@ -32,6 +38,7 @@ export interface CreatePaymentConditionPayload {
   installments: number;
   daysBetweenInstallments: number;
   entryPercentage: number;
+  paymentMethodIds?: string[];
 }
 
 export interface UpdatePaymentConditionPayload

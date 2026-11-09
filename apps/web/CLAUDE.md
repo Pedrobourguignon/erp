@@ -2,7 +2,6 @@
 
 ## Architecture
 - Use App Router (app/) exclusively. No pages/ directory.
-- Components follow: components/ui/ (primitives), components/forms/ (form inputs), components/tables/ (data display), components/charts/ (visualizations), components/layouts/ (shell)
 - Hooks in hooks/ — prefix with `use`. One hook per file.
 - Stores in stores/ — Zustand only. One store per domain. Suffix with `.store.ts`.
 - Types in types/ — shared frontend types. Use `type` over `interface` unless extending.
@@ -14,15 +13,6 @@
 - Use `"use client"` only when truly needed (hooks, events, browser APIs).
 - Server Components by default. Client Components are the exception.
 - Colocate loading.tsx, error.tsx, not-found.tsx with page.tsx.
-
-## Naming
-- Components: PascalCase (e.g., `DataTable`, `KPICard`)
-- Files: kebab-case (e.g., `data-table.tsx`, `kpi-card.tsx`)
-- Hooks: camelCase with `use` prefix (e.g., `useProducts`)
-- Stores: camelCase with `.store.ts` suffix (e.g., `auth.store.ts`)
-- Types: PascalCase (e.g., `Product`, `OrderStatus`)
-- Constants: UPPER_SNAKE_CASE
-- Event handlers: `handle` + action (e.g., `handleSubmit`, `handleDelete`)
 
 ## State Management
 - Server state: React Query (TanStack Query) exclusively
@@ -52,6 +42,13 @@
 - Brazilian documents and fiscal codes are validated by `@erp/validators` (`isValidCPF`,
   `isValidCNPJ`, `isValidNCM`, `isValidGTIN`, `isValidCFOP`), never by counting digits — counting is
   what let `111.111.111-11` and `ean: '123'` into the database (AE-04, AE-08).
+
+### Labels (MANDATORY)
+- A `<label>` needs `htmlFor` pointing at the control's `id`. Text sitting next to a field is not a
+  label as far as the browser is concerned: a screen reader announces an unnamed "edit text",
+  clicking the text does not focus the field, and `getByLabel` finds nothing.
+- `LabelLinker` (`components/a11y/label-linker.tsx`, via `lib/link-orphan-labels.ts`) links the
+  orphans it finds at runtime. It is a net under what slips, not a license to skip `htmlFor`.
 
 ### Input Masks (MANDATORY for Brazilian fields)
 - **CPF**: `000.000.000-00` — use `maskCPF` from `@/lib/masks`
@@ -266,11 +263,6 @@ full through a tooltip. Never both cut and lost.**
 - A field may legitimately be `null`; what it may not be is **absent** from the response.
 - When a column renders empty, check the response body before the component.
 
-## Imports
-- Absolute imports with @/ alias
-- Group: external → internal → components → hooks → utils → types
-- Use type imports: `import type { X } from 'y'`
-
 ## Testing (TDD — Test-Driven Development)
 
 ### TDD Workflow (MANDATORY for all new features)
@@ -283,12 +275,6 @@ Every new feature, bug fix, or refactor MUST follow the Red-Green-Refactor cycle
 
 Do NOT write implementation code before its corresponding test exists.
 
-### Test Stack
-- **Vitest** as test runner (configured in `vitest.config.ts`)
-- **@testing-library/react** + **@testing-library/jest-dom** for component testing
-- **@testing-library/user-event** for simulating user interactions
-- **msw** (Mock Service Worker) for API mocking in tests
-
 ### What to Test
 - **Hooks**: Every custom hook must have a `.test.ts` file. Test data fetching, mutations, error states, cache invalidation.
 - **Stores**: Test state transitions, persistence (localStorage), and hydration.
@@ -299,14 +285,6 @@ Do NOT write implementation code before its corresponding test exists.
 ### Test File Location
 - Test files live next to their source: `use-products.test.ts` beside `use-products.ts`.
 - Component tests: `data-table.test.tsx` beside `data-table.tsx`.
-
-### Naming Convention
-```typescript
-describe('useProducts', () => {
-  it('should fetch products with default pagination', () => { /* ... */ });
-  it('should handle API error gracefully', () => { /* ... */ });
-});
-```
 
 ## Do NOT
 - Use `any` type — ever

@@ -5,8 +5,10 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { applyTransfer } from '../financial/financial-accounts.service';
 import {
   CreateCashRegisterDto,
   UpdateCashRegisterDto,
@@ -23,6 +25,7 @@ import {
 } from '../../common/utils/pagination';
 import {
   formatBRL,
+  MoneyLike,
   subtractMoney,
   sumMoney,
   toMoney,
@@ -62,14 +65,44 @@ export class CashRegistersService {
           sessions: {
             where: { status: 'OPEN' },
             take: 1,
-            select: { id: true, status: true, operatorId: true, openedAt: true, openingBalance: true },
+            select: {
+              id: true,
+              status: true,
+              operatorId: true,
+              openedAt: true,
+              openingBalance: true,
+              movements: { select: { type: true, amount: true } },
+            },
           },
         },
       }),
       this.prisma.cashRegister.count({ where }),
     ]);
 
-    return buildPaginatedResponse(data, total, { page, limit, sortOrder: 'desc' });
+    // O card da tela de caixa mostrava só o saldo de abertura: depois de uma
+    // venda em dinheiro, R$ 50,00 na tela e R$ 399,90 na gaveta. O saldo
+    // corrente já existia, mas só no detalhe da sessão, atrás do "Ver sessão".
+    // A listagem carrega os mesmos totais para quem só bate o olho no card.
+    const openSessions = data.flatMap((register) => register.sessions);
+    const cashSales = await this.cashSalesBySession(
+      tenantId,
+      openSessions.map((session) => session.id),
+    );
+
+    const withTotals = data.map((register) => ({
+      ...register,
+      sessions: register.sessions.map(({ movements, ...session }) => ({
+        ...session,
+        openingBalance: toMoney(session.openingBalance),
+        totals: computeSessionTotals({
+          openingBalance: session.openingBalance,
+          movements,
+          cashSales: cashSales.get(session.id) ?? 0,
+        }),
+      })),
+    }));
+
+    return buildPaginatedResponse(withTotals, total, { page, limit, sortOrder: 'desc' });
   }
 
   async create(tenantId: string, dto: CreateCashRegisterDto) {
@@ -199,6 +232,30 @@ export class CashRegistersService {
       );
     }
 
+    // A conta do caixa é a gaveta, inclusive fora do expediente: o troco que
+    // ficou de ontem já está nela. Creditar a abertura inteira contava esse
+    // dinheiro de novo — R$ 50,00 de fundo viravam R$ 50,00 novos a cada dia,
+    // R$ 1.500,00 inventados por mês. Abrir caixa não cria dinheiro: só o que
+    // entra de fora (do cofre, do bolso do dono) é crédito.
+    const account = await this.prisma.financialAccount.findFirst({
+      where: { id: cashRegister.financialAccountId, tenantId },
+      select: { id: true, name: true, balance: true },
+    });
+    const balanceInDrawer = toMoney(account?.balance);
+    const openingBalance = toMoney(dto.openingBalance);
+    const externalSupply = subtractMoney(openingBalance, balanceInDrawer);
+
+    // Abrir com menos do que a conta acusa significa que saiu dinheiro sem
+    // registro. Debitar por conta própria esconderia o buraco; o certo é o
+    // operador dizer para onde o dinheiro foi.
+    if (externalSupply < 0) {
+      throw new BadRequestException(
+        `A conta "${account?.name ?? 'do caixa'}" acusa ${formatBRL(balanceInDrawer)} ` +
+          `e a abertura declara ${formatBRL(openingBalance)}. ` +
+          `Registre a sangria ou a transferência dos ${formatBRL(-externalSupply)} que saíram antes de abrir o caixa.`,
+      );
+    }
+
     const session = await this.prisma.$transaction(async (tx) => {
       const created = await tx.cashRegisterSession.create({
         data: {
@@ -206,7 +263,7 @@ export class CashRegistersService {
           cashRegisterId,
           operatorId: userId,
           status: 'OPEN',
-          openingBalance: dto.openingBalance,
+          openingBalance,
         },
         include: {
           cashRegister: { select: { id: true, name: true } },
@@ -214,13 +271,13 @@ export class CashRegistersService {
         },
       });
 
-      // FN-15: the opening float is money entering the drawer.
+      // FN-15: só o suprimento externo é dinheiro entrando na gaveta.
       await this.bookOnAccount(tx, {
         tenantId,
         accountId: cashRegister.financialAccountId,
         direction: 'in',
-        amount: toMoney(dto.openingBalance),
-        description: `Abertura de caixa - ${cashRegister.name}`,
+        amount: externalSupply,
+        description: `Suprimento de abertura - ${cashRegister.name}`,
         sessionId: created.id,
       });
 
@@ -262,19 +319,193 @@ export class CashRegistersService {
       },
     });
 
-    const supplies = sumMoney(
-      session.movements.filter((m) => m.type === 'SUPPLY').map((m) => m.amount),
-    );
-    const withdrawals = sumMoney(
-      session.movements.filter((m) => m.type === 'WITHDRAW').map((m) => m.amount),
+    return computeSessionTotals({
+      openingBalance: session.openingBalance,
+      movements: session.movements,
+      cashSales: cashSales._sum.amount,
+    }).currentBalance;
+  }
+
+  /**
+   * Vendas em dinheiro por sessão, numa query só — a listagem de caixas
+   * precisa do total de várias sessões abertas de uma vez.
+   */
+  private async cashSalesBySession(
+    tenantId: string,
+    sessionIds: string[],
+  ): Promise<Map<string, number>> {
+    const totals = new Map<string, number>();
+    if (sessionIds.length === 0) return totals;
+
+    const payments = await this.prisma.orderPayment.findMany({
+      where: {
+        tenantId,
+        paymentMethod: { type: 'CASH' },
+        order: { cashRegisterSessionId: { in: sessionIds } },
+      },
+      select: {
+        amount: true,
+        order: { select: { cashRegisterSessionId: true } },
+      },
+    });
+
+    const amountsBySession = new Map<string, MoneyLike[]>();
+    for (const payment of payments) {
+      const sessionId = payment.order?.cashRegisterSessionId;
+      if (!sessionId) continue;
+      const amounts = amountsBySession.get(sessionId) ?? [];
+      amounts.push(payment.amount);
+      amountsBySession.set(sessionId, amounts);
+    }
+
+    for (const [sessionId, amounts] of amountsBySession) {
+      totals.set(sessionId, sumMoney(amounts));
+    }
+
+    return totals;
+  }
+
+  async closeSession(
+    tenantId: string,
+    cashRegisterId: string,
+    userId: string,
+    dto: CloseSessionDto,
+  ) {
+    const cashRegister = await this.prisma.cashRegister.findFirst({
+      where: { id: cashRegisterId, tenantId },
+    });
+
+    if (!cashRegister) {
+      throw new NotFoundException(
+        `Caixa não encontrado`,
+      );
+    }
+
+    const session = await this.prisma.cashRegisterSession.findFirst({
+      where: { cashRegisterId, tenantId, status: 'OPEN' },
+      include: {
+        movements: true,
+      },
+    });
+
+    if (!session) {
+      throw new BadRequestException(
+        `O caixa "${cashRegister.name}" não está aberto`,
+      );
+    }
+
+    // What the drawer should hold: opening float + supplies − sangrias + cash
+    // sales stamped with this session (SCRUM-29). Same computation the sangria
+    // validates against, so the two can never disagree (FN-06).
+    const expectedBalance = await this.availableBalance(tenantId, session);
+    const closingBalance = toMoney(dto.closingBalance);
+    const difference = subtractMoney(closingBalance, expectedBalance);
+
+    // Fechar o caixa não é só conferir: é decidir quanto do dinheiro contado
+    // fica de troco para amanhã e para onde vai o resto. Sem essa etapa o
+    // faturamento do dia dormia na conta da gaveta e a abertura do dia
+    // seguinte recontava o fundo de troco.
+    const retainedAmount = toMoney(dto.retainedAmount ?? 0);
+    if (retainedAmount > closingBalance) {
+      throw new BadRequestException(
+        `O fundo de troco (${formatBRL(retainedAmount)}) não pode passar do valor contado (${formatBRL(closingBalance)}).`,
+      );
+    }
+
+    const amountToTransfer = dto.destinationAccountId
+      ? subtractMoney(closingBalance, retainedAmount)
+      : 0;
+
+    let destination: { id: string; name: string } | null = null;
+    if (dto.destinationAccountId && amountToTransfer > 0) {
+      if (dto.destinationAccountId === cashRegister.financialAccountId) {
+        throw new BadRequestException(
+          'A conta de destino deve ser diferente da conta do próprio caixa.',
+        );
+      }
+
+      destination = await this.prisma.financialAccount.findFirst({
+        where: { id: dto.destinationAccountId, tenantId },
+        select: { id: true, name: true },
+      });
+
+      if (!destination) {
+        throw new NotFoundException('Conta de destino não encontrada');
+      }
+    }
+
+    const closed = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.cashRegisterSession.update({
+        where: { id: session.id },
+        data: {
+          status: 'CLOSED',
+          closedById: userId,
+          closedAt: new Date(),
+          closingBalance,
+          expectedBalance,
+          difference,
+          notes: dto.notes,
+        },
+        include: {
+          cashRegister: { select: { id: true, name: true } },
+          operator: { select: { id: true, name: true } },
+          closedBy: { select: { id: true, name: true } },
+          movements: true,
+        },
+      });
+
+      // FN-15: the counted difference is real money the account does not know
+      // about yet — a shortfall leaves the account, a surplus enters it.
+      if (difference !== 0) {
+        await this.bookOnAccount(tx, {
+          tenantId,
+          accountId: cashRegister.financialAccountId,
+          direction: difference > 0 ? 'in' : 'out',
+          amount: Math.abs(difference),
+          description: `${difference > 0 ? 'Sobra' : 'Falta'} no fechamento - ${cashRegister.name}`,
+          sessionId: session.id,
+        });
+      }
+
+      // Depois do acerto da diferença a conta vale o valor contado; a
+      // transferência deixa nela exatamente o fundo de troco retido. Vai na
+      // mesma transação do fechamento de propósito: caixa fechado com o
+      // dinheiro do dia ainda contado na gaveta é o pior dos dois mundos.
+      if (destination && amountToTransfer > 0) {
+        await applyTransfer(tx, {
+          tenantId,
+          from: {
+            id: cashRegister.financialAccountId,
+            name: cashRegister.name,
+          },
+          to: destination,
+          amount: amountToTransfer,
+          description: `Fechamento de caixa ${cashRegister.name} → ${destination.name}`,
+          when: new Date(),
+          transferId: randomUUID(),
+        });
+      }
+
+      return updated;
+    });
+
+    this.logger.log(
+      `Cash session closed: ${session.id} for register ${cashRegister.name}. ` +
+        `Expected: ${expectedBalance}, Counted: ${dto.closingBalance}, Diff: ${difference}`,
     );
 
-    return sumMoney([
-      session.openingBalance,
-      supplies,
-      cashSales._sum.amount,
-      -withdrawals,
-    ]);
+    return {
+      ...closed,
+      transfer:
+        destination && amountToTransfer > 0
+          ? {
+              toAccountId: destination.id,
+              toAccountName: destination.name,
+              amount: amountToTransfer,
+            }
+          : null,
+      retainedAmount,
+    };
   }
 
   /**
@@ -326,84 +557,90 @@ export class CashRegistersService {
     });
   }
 
-  async closeSession(
-    tenantId: string,
-    cashRegisterId: string,
-    userId: string,
-    dto: CloseSessionDto,
-  ) {
-    const cashRegister = await this.prisma.cashRegister.findFirst({
-      where: { id: cashRegisterId, tenantId },
-    });
+  /**
+   * Reflete na gaveta uma baixa paga (ou recebida) pela conta de um caixa
+   * aberto.
+   *
+   * A conta de um caixa é a gaveta. Pagar um título por ela — o reembolso de um
+   * estorno, a conta de luz, um fornecedor — tira dinheiro físico de dentro
+   * dela, mas a baixa só mexia no saldo da conta: no fechamento a contagem não
+   * batia e a "diferença" nascia da tela, não do caixa.
+   *
+   * Conta sem caixa aberto não gera movimento nenhum — é uma conta bancária
+   * comum, ou um caixa fechado, e aí o dinheiro não está em gaveta alguma.
+   */
+  async mirrorSettlementInDrawer(
+    tx: Prisma.TransactionClient,
+    input: {
+      tenantId: string;
+      accountId: string;
+      direction: 'in' | 'out';
+      amount: number;
+      reason: string;
+      userId: string;
+    },
+  ): Promise<{ sessionId: string } | null> {
+    if (input.amount <= 0) return null;
 
-    if (!cashRegister) {
-      throw new NotFoundException(
-        `Caixa não encontrado`,
-      );
+    const session = await tx.cashRegisterSession.findFirst({
+      where: {
+        tenantId: input.tenantId,
+        status: 'OPEN',
+        cashRegister: { financialAccountId: input.accountId },
+      },
+      orderBy: { openedAt: 'asc' },
+      select: {
+        id: true,
+        openingBalance: true,
+        cashRegister: { select: { name: true } },
+      },
+    });
+    if (!session) return null;
+
+    // FN-06: uma gaveta não guarda dinheiro negativo. Mesma trava da sangria,
+    // porque é a mesma operação vista de outro lugar.
+    if (input.direction === 'out') {
+      const [movements, cashSales] = await Promise.all([
+        tx.cashRegisterMovement.findMany({
+          where: { sessionId: session.id },
+          select: { type: true, amount: true },
+        }),
+        tx.orderPayment.aggregate({
+          _sum: { amount: true },
+          where: {
+            tenantId: input.tenantId,
+            paymentMethod: { type: 'CASH' },
+            order: { cashRegisterSessionId: session.id },
+          },
+        }),
+      ]);
+
+      const available = computeSessionTotals({
+        openingBalance: session.openingBalance,
+        movements,
+        cashSales: cashSales._sum.amount,
+      }).currentBalance;
+
+      if (input.amount > available) {
+        throw new BadRequestException(
+          `Saldo insuficiente no caixa "${session.cashRegister.name}" ` +
+            `(disponível: ${formatBRL(available)}).`,
+        );
+      }
     }
 
-    const session = await this.prisma.cashRegisterSession.findFirst({
-      where: { cashRegisterId, tenantId, status: 'OPEN' },
-      include: {
-        movements: true,
+    await tx.cashRegisterMovement.create({
+      data: {
+        tenantId: input.tenantId,
+        sessionId: session.id,
+        type: input.direction === 'in' ? 'SUPPLY' : 'WITHDRAW',
+        amount: input.amount,
+        reason: input.reason.slice(0, 255),
+        performedById: input.userId,
       },
     });
 
-    if (!session) {
-      throw new BadRequestException(
-        `O caixa "${cashRegister.name}" não está aberto`,
-      );
-    }
-
-    // What the drawer should hold: opening float + supplies − sangrias + cash
-    // sales stamped with this session (SCRUM-29). Same computation the sangria
-    // validates against, so the two can never disagree (FN-06).
-    const expectedBalance = await this.availableBalance(tenantId, session);
-    const closingBalance = toMoney(dto.closingBalance);
-    const difference = subtractMoney(closingBalance, expectedBalance);
-
-    const closed = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.cashRegisterSession.update({
-        where: { id: session.id },
-        data: {
-          status: 'CLOSED',
-          closedById: userId,
-          closedAt: new Date(),
-          closingBalance,
-          expectedBalance,
-          difference,
-          notes: dto.notes,
-        },
-        include: {
-          cashRegister: { select: { id: true, name: true } },
-          operator: { select: { id: true, name: true } },
-          closedBy: { select: { id: true, name: true } },
-          movements: true,
-        },
-      });
-
-      // FN-15: the counted difference is real money the account does not know
-      // about yet — a shortfall leaves the account, a surplus enters it.
-      if (difference !== 0) {
-        await this.bookOnAccount(tx, {
-          tenantId,
-          accountId: cashRegister.financialAccountId,
-          direction: difference > 0 ? 'in' : 'out',
-          amount: Math.abs(difference),
-          description: `${difference > 0 ? 'Sobra' : 'Falta'} no fechamento - ${cashRegister.name}`,
-          sessionId: session.id,
-        });
-      }
-
-      return updated;
-    });
-
-    this.logger.log(
-      `Cash session closed: ${session.id} for register ${cashRegister.name}. ` +
-        `Expected: ${expectedBalance}, Counted: ${dto.closingBalance}, Diff: ${difference}`,
-    );
-
-    return closed;
+    return { sessionId: session.id };
   }
 
   async supply(
@@ -541,12 +778,6 @@ export class CashRegistersService {
     // sessão entram no saldo. Sem elas a tela mostrava R$ 100 enquanto o
     // fechamento esperava R$ 249,90, e o operador conferia contra o número
     // errado — a "diferença" nascia da tela, não da gaveta.
-    const supplies = sumMoney(
-      session.movements.filter((m) => m.type === 'SUPPLY').map((m) => m.amount),
-    );
-    const withdrawals = sumMoney(
-      session.movements.filter((m) => m.type === 'WITHDRAW').map((m) => m.amount),
-    );
     const cashSalesAgg = await this.prisma.orderPayment.aggregate({
       _sum: { amount: true },
       where: {
@@ -555,17 +786,14 @@ export class CashRegistersService {
         order: { cashRegisterSessionId: session.id },
       },
     });
-    const cashSales = toMoney(cashSalesAgg._sum.amount);
-    const currentBalance = await this.availableBalance(tenantId, session);
 
     return {
       ...session,
-      totals: {
-        supplies,
-        withdrawals,
-        cashSales,
-        currentBalance,
-      },
+      totals: computeSessionTotals({
+        openingBalance: session.openingBalance,
+        movements: session.movements,
+        cashSales: cashSalesAgg._sum.amount,
+      }),
     };
   }
 
@@ -697,4 +925,43 @@ export class CashRegistersService {
 
     return session;
   }
+}
+
+/**
+ * A conta do saldo de gaveta, num lugar só: abertura + suprimentos + vendas em
+ * dinheiro − sangrias.
+ *
+ * Fechamento, detalhe da sessão e card da listagem contam a mesma coisa. Cada
+ * um refazendo a soma por conta própria é como a tela chegou a mostrar
+ * "abertura R$ 200 + entradas R$ 0 − saídas R$ 0 = saldo atual R$ 500".
+ */
+export function computeSessionTotals(input: {
+  openingBalance: MoneyLike;
+  movements: { type: string; amount: MoneyLike }[];
+  cashSales: MoneyLike;
+}): {
+  supplies: number;
+  withdrawals: number;
+  cashSales: number;
+  currentBalance: number;
+} {
+  const supplies = sumMoney(
+    input.movements.filter((m) => m.type === 'SUPPLY').map((m) => m.amount),
+  );
+  const withdrawals = sumMoney(
+    input.movements.filter((m) => m.type === 'WITHDRAW').map((m) => m.amount),
+  );
+  const cashSales = toMoney(input.cashSales);
+
+  return {
+    supplies,
+    withdrawals,
+    cashSales,
+    currentBalance: sumMoney([
+      input.openingBalance,
+      supplies,
+      cashSales,
+      -withdrawals,
+    ]),
+  };
 }

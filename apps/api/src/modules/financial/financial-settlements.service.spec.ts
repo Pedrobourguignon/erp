@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { FinancialSettlementsService } from './financial-settlements.service';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { CashRegistersService } from '../cash-registers/cash-registers.service';
 
 const TENANT_A = 'tenant-aaa-111';
 const TENANT_B = 'tenant-bbb-222';
@@ -70,15 +71,19 @@ describe('FinancialSettlementsService', () => {
   let service: FinancialSettlementsService;
   let prisma: ReturnType<typeof createMockPrisma>;
   let tx: ReturnType<typeof createMockTx>;
+  let cashRegisters: { mirrorSettlementInDrawer: jest.Mock };
 
   beforeEach(async () => {
     tx = createMockTx();
     prisma = createMockPrisma(tx);
 
+    cashRegisters = { mirrorSettlementInDrawer: jest.fn().mockResolvedValue(null) };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FinancialSettlementsService,
         { provide: PrismaService, useValue: prisma },
+        { provide: CashRegistersService, useValue: cashRegisters },
       ],
     }).compile();
 
@@ -308,6 +313,52 @@ describe('FinancialSettlementsService', () => {
       await expect(
         service.settle(TENANT_A, PAYABLE_ID, { kind: 'PAYABLE' }),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ─── A gaveta acompanha a baixa paga pela conta do caixa ────────────────
+
+  describe('reflexo no caixa', () => {
+    // A conta de um caixa aberto é a gaveta: pagar um título por ela tira
+    // dinheiro físico de dentro dela. Sem este reflexo, o fechamento contava
+    // uma gaveta que ninguém tinha mexido e acusava diferença.
+    it('espelha na gaveta o pagamento de um título', async () => {
+      prisma.accountsPayable.findFirst.mockResolvedValue(makePayable());
+      tx.financialAccount.update.mockResolvedValue({ balance: 500 });
+
+      await service.settle(TENANT_A, PAYABLE_ID, { kind: 'PAYABLE' }, 'user-1');
+
+      expect(cashRegisters.mirrorSettlementInDrawer).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          tenantId: TENANT_A,
+          accountId: 'acc-1',
+          direction: 'out',
+          amount: 100,
+          userId: 'user-1',
+        }),
+      );
+    });
+
+    it('espelha um recebimento como entrada na gaveta', async () => {
+      prisma.accountsReceivable.findFirst.mockResolvedValue(makeReceivable());
+      tx.financialAccount.update.mockResolvedValue({ balance: 1250 });
+
+      await service.settle(TENANT_A, RECEIVABLE_ID, { kind: 'RECEIVABLE' }, 'user-1');
+
+      expect(cashRegisters.mirrorSettlementInDrawer).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({ direction: 'in', userId: 'user-1' }),
+      );
+    });
+
+    it('não tenta refletir nada quando a baixa não sabe quem a fez', async () => {
+      prisma.accountsPayable.findFirst.mockResolvedValue(makePayable());
+      tx.financialAccount.update.mockResolvedValue({ balance: 500 });
+
+      await service.settle(TENANT_A, PAYABLE_ID, { kind: 'PAYABLE' });
+
+      expect(cashRegisters.mirrorSettlementInDrawer).not.toHaveBeenCalled();
     });
   });
 });

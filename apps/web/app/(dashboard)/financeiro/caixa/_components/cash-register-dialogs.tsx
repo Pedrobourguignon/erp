@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
 import React from "react";
-import { useForm, Controller } from "react-hook-form";
+import { useForm, Controller, type Control } from "react-hook-form";
 import { z } from "zod";
 
 import { MoneyInput } from "@/components/forms/money-input";
@@ -35,6 +35,7 @@ import {
 } from "@/hooks/use-cash-registers";
 import { useFinancialAccounts } from "@/hooks/use-financial-accounts";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
+import { formatCurrency } from "@/lib/utils";
 
 // ─── Coerce helper ─────────────────────────────────────────────────────
 
@@ -160,16 +161,28 @@ export function OpenSessionDialog({
   onClose: () => void;
 }) {
   const mutation = useOpenCashRegister();
+  const { data: accountsData } = useFinancialAccounts({ isActive: true });
   const { addToast } = useToast();
 
-  const { handleSubmit, control, reset } = useForm<OpenFormValues>({
+  // A conta do caixa é a gaveta, inclusive de um dia para o outro: o troco que
+  // ficou de ontem já está nela. O saldo dela é o palpite certo de abertura, e
+  // só o que passar disso é dinheiro novo entrando.
+  const account = (accountsData?.data ?? []).find(
+    (acc) => acc.id === reg?.financialAccountId
+  );
+  const balanceInDrawer = Number(account?.balance ?? 0);
+
+  const { handleSubmit, control, reset, watch } = useForm<OpenFormValues>({
     resolver: zodResolver(openSchema),
     defaultValues: { openingBalance: 0 },
   });
 
   React.useEffect(() => {
-    if (reg) {reset({ openingBalance: 0 });}
-  }, [reg, reset]);
+    if (reg) {reset({ openingBalance: balanceInDrawer });}
+  }, [reg, balanceInDrawer, reset]);
+
+  const declared = watch("openingBalance") || 0;
+  const externalSupply = declared - balanceInDrawer;
 
   const onSubmit = async (data: OpenFormValues) => {
     if (!reg) {
@@ -200,7 +213,33 @@ export function OpenSessionDialog({
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4"
           noValidate
         >
+          {account ? (
+            <p className="rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+              A conta <span className="font-medium text-foreground">{account.name}</span>{" "}
+              acusa{" "}
+              <span className="font-medium text-foreground">
+                {formatCurrency(balanceInDrawer)}
+              </span>{" "}
+              na gaveta. Informe o total que está lá agora.
+            </p>
+          ) : null}
+
           <MoneyInput name="openingBalance" control={control} label="Saldo de Abertura" />
+
+          {externalSupply > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {formatCurrency(externalSupply)} serão lançados como suprimento —
+              dinheiro entrando de fora.
+            </p>
+          ) : null}
+          {externalSupply < 0 ? (
+            <p className="text-xs text-destructive">
+              Faltam {formatCurrency(-externalSupply)} em relação ao que a conta
+              acusa. Registre a sangria ou a transferência do que saiu antes de
+              abrir.
+            </p>
+          ) : null}
+
           <DialogFooter>
             <Button type="button" variant="cancel" onClick={onClose}>Cancelar</Button>
             <Button type="submit" disabled={mutation.isPending}>
@@ -216,12 +255,111 @@ export function OpenSessionDialog({
 
 // ─── Close Session Dialog ──────────────────────────────────────────────
 
-const closeSchema = z.object({
-  closingBalance: z.preprocess(coerceNumber, z.number().min(0, "Valor inválido")),
-  notes: z.string().max(500).optional(),
-});
+/**
+ * Sentinela do select de destino: fechar sem transferir nada, deixando todo o
+ * dinheiro contado na gaveta. É o comportamento antigo, agora uma escolha
+ * explícita em vez do padrão silencioso.
+ */
+const KEEP_IN_REGISTER = "KEEP";
+
+const closeSchema = z
+  .object({
+    closingBalance: z.preprocess(coerceNumber, z.number().min(0, "Valor inválido")),
+    notes: z.string().max(500).optional(),
+    destinationAccountId: z.string().min(1, "Escolha o destino do dinheiro"),
+    retainedAmount: z.preprocess(coerceNumber, z.number().min(0, "Valor inválido")),
+  })
+  .superRefine((data, ctx) => {
+    if (
+      data.destinationAccountId !== KEEP_IN_REGISTER &&
+      data.retainedAmount > data.closingBalance
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["retainedAmount"],
+        message: "O fundo de troco não pode passar do valor contado",
+      });
+    }
+  });
 
 type CloseFormValues = z.infer<typeof closeSchema>;
+
+/**
+ * Fechar o caixa é também decidir o que acontece com o dinheiro: quanto fica de
+ * troco para amanhã e para onde vai o faturamento do dia. Sem essa etapa o
+ * dinheiro dormia na conta da gaveta e a abertura seguinte recontava o fundo.
+ */
+function MoneyDestinationFields({
+  control,
+  accounts,
+  showFloat,
+  amountToTransfer,
+  retained,
+  counted,
+  error,
+}: {
+  control: Control<CloseFormValues>;
+  accounts: { id: string; name: string }[];
+  showFloat: boolean;
+  amountToTransfer: number;
+  retained: number;
+  counted: number;
+  error?: string;
+}) {
+  return (
+    <>
+      <div className="space-y-1">
+        <label className="text-sm font-medium">Destino do dinheiro</label>
+        <Controller
+          name="destinationAccountId"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione o destino" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={KEEP_IN_REGISTER}>Deixar tudo no caixa</SelectItem>
+                {accounts.map((acc) => (
+                  <SelectItem key={acc.id} value={acc.id}>
+                    Transferir para {acc.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+      </div>
+
+      {showFloat ? (
+        <div className="space-y-1">
+          <MoneyInput
+            name="retainedAmount"
+            control={control}
+            label="Fundo de troco que permanece no caixa"
+          />
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          {/* Sem esta guarda o preview afirmava "vai transferir R$ 0,00 e
+              deixar R$ 250.000,00 na gaveta" para um fundo maior que a
+              contagem — uma frase que o fechamento nunca executaria. */}
+          {retained > counted ? (
+            <p className="text-xs text-destructive">
+              O fundo de troco não cabe no valor contado ({formatCurrency(counted)}).
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Vai transferir{" "}
+              <span className="font-medium text-foreground">
+                {formatCurrency(amountToTransfer)}
+              </span>{" "}
+              e deixar {formatCurrency(retained)} na gaveta para a próxima abertura.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 export function CloseSessionDialog({
   register: reg,
@@ -231,29 +369,68 @@ export function CloseSessionDialog({
   onClose: () => void;
 }) {
   const mutation = useCloseCashRegister();
+  const { data: accountsData } = useFinancialAccounts({ isActive: true });
   const { addToast } = useToast();
 
-  const { register: formRegister, handleSubmit, control, reset } =
+  // O dinheiro não pode ir para a conta de onde está saindo.
+  const accounts = (accountsData?.data ?? []).filter(
+    (acc) => acc.id !== reg?.financialAccountId
+  );
+  const expectedBalance = reg?.currentSession?.totals?.currentBalance;
+  const openingFloat = reg?.currentSession?.openingBalance ?? 0;
+
+  const { register: formRegister, handleSubmit, control, reset, watch, formState: { errors } } =
     useForm<CloseFormValues>({
       resolver: zodResolver(closeSchema),
-      defaultValues: { closingBalance: 0, notes: "" },
+      defaultValues: {
+        closingBalance: 0,
+        notes: "",
+        destinationAccountId: KEEP_IN_REGISTER,
+        retainedAmount: 0,
+      },
     });
 
   React.useEffect(() => {
-    if (reg) {reset({ closingBalance: 0, notes: "" });}
+    if (reg) {
+      reset({
+        closingBalance: 0,
+        notes: "",
+        destinationAccountId: KEEP_IN_REGISTER,
+        // O fundo que abriu o caixa é o que faz sentido deixar para amanhã.
+        retainedAmount: reg.currentSession?.openingBalance ?? 0,
+      });
+    }
   }, [reg, reset]);
+
+  const destination = watch("destinationAccountId");
+  const counted = watch("closingBalance");
+  const retained = watch("retainedAmount");
+  const willTransfer = destination !== KEEP_IN_REGISTER;
+  const amountToTransfer = Math.max(0, (counted || 0) - (retained || 0));
 
   const onSubmit = async (data: CloseFormValues) => {
     if (!reg) {
       return;
     }
     try {
-      await mutation.mutateAsync({
+      const result = await mutation.mutateAsync({
         id: reg.id,
         closingBalance: data.closingBalance,
         notes: data.notes || undefined,
+        ...(data.destinationAccountId === KEEP_IN_REGISTER
+          ? {}
+          : {
+              retainedAmount: data.retainedAmount,
+              destinationAccountId: data.destinationAccountId,
+            }),
       });
-      addToast("Caixa fechado com sucesso!", "success");
+      const transfer = result.data?.transfer;
+      addToast(
+        transfer
+          ? `Caixa fechado. ${formatCurrency(transfer.amount)} transferidos para ${transfer.toAccountName}.`
+          : "Caixa fechado com sucesso!",
+        "success"
+      );
       onClose();
     } catch (err) {
       addToast(
@@ -276,7 +453,29 @@ export function CloseSessionDialog({
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4"
           noValidate
         >
+          {expectedBalance !== undefined ? (
+            <p className="rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+              Saldo esperado na gaveta:{" "}
+              <span className="font-medium text-foreground">
+                {formatCurrency(expectedBalance)}
+              </span>{" "}
+              (abertura {formatCurrency(openingFloat)} + vendas em dinheiro +
+              suprimentos − sangrias)
+            </p>
+          ) : null}
+
           <MoneyInput name="closingBalance" control={control} label="Saldo Contado" />
+
+          <MoneyDestinationFields
+            control={control}
+            accounts={accounts}
+            showFloat={willTransfer}
+            amountToTransfer={amountToTransfer}
+            retained={retained || 0}
+            counted={counted || 0}
+            error={errors.retainedAmount?.message}
+          />
+
           <div className="space-y-1">
             <label className="text-sm font-medium">Observações</label>
             <textarea

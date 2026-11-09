@@ -62,9 +62,14 @@ export class FinancialEntriesController {
   @ApiOperation({ summary: 'Create a manual financial entry (despesa/receita)' })
   async create(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() userId: string,
     @Body() dto: CreateFinancialEntryDto,
   ) {
-    const entry = await this.financialEntriesService.create(tenantId, dto);
+    const entry = await this.financialEntriesService.create(
+      tenantId,
+      dto,
+      userId,
+    );
     return { success: true, data: entry };
   }
 
@@ -76,10 +81,16 @@ export class FinancialEntriesController {
   })
   async settle(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() userId: string,
     @Param('id') id: string,
     @Body() dto: SettleFinancialEntryDto,
   ) {
-    const result = await this.financialSettlementsService.settle(tenantId, id, dto);
+    const result = await this.financialSettlementsService.settle(
+      tenantId,
+      id,
+      dto,
+      userId,
+    );
     return { success: true, data: result };
   }
 

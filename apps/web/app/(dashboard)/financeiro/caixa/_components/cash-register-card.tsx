@@ -27,52 +27,19 @@ interface CashRegisterCardProps {
   onViewSession: (register: CashRegister) => void;
 }
 
-// ─── Component ─────────────────────────────────────────────────────────
-
-export function CashRegisterCard({
+function RegisterActions({
   register: reg,
+  isOpen,
   onOpen,
   onClose,
   onSupply,
   onWithdraw,
   onViewSession,
-}: CashRegisterCardProps) {
-  const isOpen = reg.currentSession?.status === "OPEN";
-
+}: Omit<CashRegisterCardProps, "register"> & {
+  register: CashRegister;
+  isOpen: boolean;
+}) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-base">{reg.name}</CardTitle>
-        <Badge variant={isOpen ? "success" : "secondary"}>
-          {isOpen ? "Aberto" : "Fechado"}
-        </Badge>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {isOpen && reg.currentSession ? <div className="space-y-2 text-sm">
-            {reg.currentSession.operator ? <div className="flex justify-between">
-                <span className="text-muted-foreground">Operador</span>
-                <span className="font-medium">
-                  {reg.currentSession.operator.name}
-                </span>
-              </div> : null}
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Aberto em</span>
-              <span>{formatDateTime(reg.currentSession.openedAt)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Saldo abertura</span>
-              <span className="font-medium">
-                {formatCurrency(reg.currentSession.openingBalance)}
-              </span>
-            </div>
-          </div> : null}
-
-        {!isOpen && (
-          <p className="py-2 text-center text-sm text-muted-foreground">
-            Nenhuma sessão aberta
-          </p>
-        )}
-
         <div className="flex flex-wrap gap-2">
           {!isOpen ? (
             <Button
@@ -128,6 +95,89 @@ export function CashRegisterCard({
             </>
           )}
         </div>
+  );
+}
+
+function SessionRow({
+  label,
+  value,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  emphasis?: boolean;
+}) {
+  return (
+    <div className={`flex justify-between${emphasis ? " border-t pt-2" : ""}`}>
+      <span className="text-muted-foreground">{label}</span>
+      <span className={emphasis ? "font-semibold" : "font-medium"}>{value}</span>
+    </div>
+  );
+}
+
+// ─── Component ─────────────────────────────────────────────────────────
+
+export function CashRegisterCard({
+  register: reg,
+  onOpen,
+  onClose,
+  onSupply,
+  onWithdraw,
+  onViewSession,
+}: CashRegisterCardProps) {
+  const isOpen = reg.currentSession?.status === "OPEN";
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardTitle className="text-base">{reg.name}</CardTitle>
+        <Badge variant={isOpen ? "success" : "secondary"}>
+          {isOpen ? "Aberto" : "Fechado"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isOpen && reg.currentSession ? <div className="space-y-2 text-sm">
+            {reg.currentSession.operator ? (
+              <SessionRow label="Operador" value={reg.currentSession.operator.name} />
+            ) : null}
+            <SessionRow
+              label="Aberto em"
+              value={formatDateTime(reg.currentSession.openedAt)}
+            />
+            <SessionRow
+              label="Saldo abertura"
+              value={formatCurrency(reg.currentSession.openingBalance)}
+            />
+            {/* Só a abertura ficava à vista: depois de uma venda em dinheiro o
+                card dizia R$ 50,00 com R$ 399,90 na gaveta. Quem passa o olho
+                na tela precisa do saldo de agora, não do de quando abriu — o
+                detalhamento (vendas, suprimentos, sangrias) continua em
+                "Ver sessão". */}
+            <SessionRow
+              label="Saldo atual"
+              value={formatCurrency(
+                reg.currentSession.totals?.currentBalance ??
+                  reg.currentSession.openingBalance
+              )}
+              emphasis
+            />
+          </div> : null}
+
+        {!isOpen && (
+          <p className="py-2 text-center text-sm text-muted-foreground">
+            Nenhuma sessão aberta
+          </p>
+        )}
+
+        <RegisterActions
+          register={reg}
+          isOpen={isOpen}
+          onOpen={onOpen}
+          onClose={onClose}
+          onSupply={onSupply}
+          onWithdraw={onWithdraw}
+          onViewSession={onViewSession}
+        />
       </CardContent>
     </Card>
   );

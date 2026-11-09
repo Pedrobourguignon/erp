@@ -15,6 +15,7 @@ import { usePaymentConditions } from "@/hooks/use-payment-conditions";
 import { usePaymentMethods } from "@/hooks/use-payment-methods";
 import { isPermissionError } from "@/lib/api-errors";
 import {
+  hasLineWithoutMethod,
   settlePayments,
   type PaymentSettlement,
 } from "@/lib/payment-settlement";
@@ -25,6 +26,7 @@ import {
   shouldShowCondition,
   requiresLinkedAccount,
   hasMissingAccount,
+  filterConditionsForMethod,
 } from "./payment-line";
 
 
@@ -111,6 +113,23 @@ export function PaymentSelector({
     }
   }, [fields.length, totalAmount, payments, setValue, methodTypeById]);
 
+  // SCRUM-52: trocar o método pode invalidar a condição já escolhida (ela
+  // ficou vinculada a outro método). O Select já mostra em branco nesse caso
+  // — sem isto o valor antigo ficaria escondido no form e seguiria junto no
+  // submit.
+  useEffect(() => {
+    (payments ?? []).forEach((payment, index) => {
+      if (!payment?.paymentConditionId) {return;}
+      const stillValid = filterConditionsForMethod(
+        conditions,
+        payment.paymentMethodId
+      ).some((c) => c.id === payment.paymentConditionId);
+      if (!stillValid) {
+        setValue(`payments.${index}.paymentConditionId` as never, "" as never);
+      }
+    });
+  }, [payments, conditions, setValue]);
+
   const missingAccount = hasMissingAccount(payments, methods);
 
   useEffect(() => {
@@ -168,6 +187,10 @@ export function PaymentSelector({
               (m) => m.id === payment?.paymentMethodId
             );
             const methodType = selectedMethod?.type ?? null;
+            const lineConditions = filterConditionsForMethod(
+              conditions,
+              selectedMethod?.id
+            );
             const lineError = (
               errors as unknown as
                 | Array<{ authorizationCode?: { message?: string } }>
@@ -185,7 +208,7 @@ export function PaymentSelector({
                 control={control as Control<Record<string, unknown>>}
                 setValue={setValue}
                 methods={methods}
-                conditions={conditions}
+                conditions={lineConditions}
                 selectedCondition={conditions.find(
                   (c) => c.id === payment?.paymentConditionId
                 )}
@@ -223,6 +246,7 @@ export function PaymentSelector({
           paymentTotal={paymentTotal}
           settlement={settlement}
           progressPct={progressPct}
+          hasLineWithoutMethod={hasLineWithoutMethod(payments)}
         />
       )}
 
@@ -238,14 +262,16 @@ function PaymentProgress({
   paymentTotal,
   settlement,
   progressPct,
+  hasLineWithoutMethod: missingMethod,
 }: {
+  hasLineWithoutMethod: boolean;
   totalAmount: number;
   paymentTotal: number;
   settlement: PaymentSettlement;
   progressPct: number;
 }) {
   const hasChange = settlement.change > 0.005;
-  const isExact = settlement.isSettled && !hasChange;
+  const isExact = settlement.isSettled && !hasChange && !missingMethod;
   const isUnder = settlement.missing > 0.005;
   // Only cash may exceed the total; anything else is a typo the seller must fix.
   const isOver = !settlement.isSettled && !isUnder;
@@ -278,6 +304,9 @@ function PaymentProgress({
         </p> : null}
       {hasChange ? <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
           Troco: {formatCurrency(settlement.change)}
+        </p> : null}
+      {missingMethod ? <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+          Selecione a forma de pagamento de cada linha.
         </p> : null}
       {isExact ? <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
           Pagamento completo

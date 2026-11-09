@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { InventoryService } from '../../modules/inventory/inventory.service';
-import { isImmediatePayment } from '../../common/constants/payment.constants';
+import { settlesAtSale } from '../../common/constants/payment.constants';
+import { fromCents, toCents } from '../../common/utils/money.util';
 import { roundMoney, splitInstallments } from '@erp/validators';
 import {
   civilDaysFrom,
@@ -16,6 +17,9 @@ import {
   OrderCounterSaleEvent,
   EVENT_NAMES,
 } from '../event-types';
+
+/** Marks an AccountsPayable as the acquirer fee of a sale payment. */
+export const PAYMENT_FEE_KIND = 'PAYMENT_FEE';
 
 @Injectable()
 export class OrderEventsHandler {
@@ -189,6 +193,19 @@ export class OrderEventsHandler {
         data: { status: 'CANCELLED' },
       });
 
+      // The fee of a sale that did not happen is not owed to anyone.
+      await this.prisma.accountsPayable.updateMany({
+        where: {
+          tenantId: event.tenantId,
+          status: { in: ['PENDING', 'PARTIALLY_PAID'] },
+          AND: [
+            { metadata: { path: ['kind'], equals: PAYMENT_FEE_KIND } },
+            { metadata: { path: ['orderId'], equals: event.orderId } },
+          ],
+        },
+        data: { status: 'CANCELLED' },
+      });
+
       // Create notification
       await this.createNotification(
         event.tenantId,
@@ -316,7 +333,9 @@ export class OrderEventsHandler {
     const orderPayments = await this.prisma.orderPayment.findMany({
       where: { orderId, tenantId },
       include: {
-        paymentMethod: { select: { name: true, type: true, defaultAccountId: true } },
+        paymentMethod: {
+          select: { name: true, type: true, defaultAccountId: true, settlementDays: true },
+        },
       },
     });
 
@@ -327,7 +346,7 @@ export class OrderEventsHandler {
     const drawerAccountId = await this.resolveDrawerAccountId(tenantId, orderId);
 
     for (const op of orderPayments) {
-      if (!isImmediatePayment(op.paymentMethod.type)) continue;
+      if (!settlesAtSale(op.paymentMethod.type, op.paymentMethod.settlementDays)) continue;
 
       // Para dinheiro vivo a gaveta vence qualquer padrão: a nota está
       // fisicamente ali. A conta do pagamento (que hoje é só uma cópia do
@@ -399,7 +418,15 @@ export class OrderEventsHandler {
     const orderPayments = await this.prisma.orderPayment.findMany({
       where: { orderId, tenantId },
       include: {
-        paymentMethod: { select: { id: true, name: true, type: true } },
+        paymentMethod: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            settlementDays: true,
+            feePercentage: true,
+          },
+        },
         paymentCondition: { select: { id: true, daysBetweenInstallments: true, entryPercentage: true, type: true } },
       },
     });
@@ -433,17 +460,25 @@ export class OrderEventsHandler {
     for (const op of orderPayments) {
       const methodType = op.paymentMethod.type;
       const methodName = op.paymentMethod.name;
-      const isImmediate = isImmediatePayment(methodType);
+      const settlementDays = op.paymentMethod.settlementDays ?? null;
+      const isImmediate = settlesAtSale(methodType, settlementDays);
       const totalInstallments = op.installments;
       const daysBetween = op.paymentCondition?.daysBetweenInstallments ?? 30;
       const entryPct = op.paymentCondition?.entryPercentage ? Number(op.paymentCondition.entryPercentage) : 0;
       const conditionType = op.paymentCondition?.type;
 
       const amount = Number(op.amount);
+      // When the first money of this payment reaches the account — the fee is
+      // charged on that day.
+      let firstDueDate: Date = civilDaysFrom(now, 0);
 
       if (totalInstallments <= 1 || conditionType === 'CASH') {
         // Single payment
         const isPaid = isImmediate;
+        // Settlement days of the method say when the acquirer pays; the
+        // condition's interval is only the fallback for a method without one.
+        const daysToReceive = settlementDays && settlementDays > 0 ? settlementDays : daysBetween;
+        firstDueDate = civilDaysFrom(now, isImmediate ? 0 : daysToReceive);
         await this.prisma.accountsReceivable.create({
           data: {
             tenantId,
@@ -456,7 +491,7 @@ export class OrderEventsHandler {
             totalInstallments: 1,
             amount,
             status: isPaid ? 'PAID' : 'PENDING',
-            dueDate: civilDaysFrom(now, isImmediate ? 0 : daysBetween),
+            dueDate: firstDueDate,
             paidAt: isPaid ? now : null,
             paidAmount: isPaid ? amount : 0,
           },
@@ -511,6 +546,7 @@ export class OrderEventsHandler {
         // preview the seller sees is the exact set of receivables created here.
         const installmentAmounts = splitInstallments(amount, totalInstallments);
         const dueDates = civilInstallmentDueDates(now, totalInstallments, daysBetween);
+        firstDueDate = dueDates[0];
 
         for (let i = 1; i <= totalInstallments; i++) {
           await this.prisma.accountsReceivable.create({
@@ -530,7 +566,55 @@ export class OrderEventsHandler {
           });
         }
       }
+
+      await this.bookPaymentFee(tenantId, orderId, orderNumber, op, firstDueDate);
     }
+  }
+
+  /**
+   * The acquirer's fee is a cost of the sale, not a discount on it: the
+   * receivable keeps the gross amount and the fee becomes its own payable, so
+   * the DRE shows what the card machine costs. One per payment, whatever the
+   * number of installments, due when the first money arrives.
+   */
+  private async bookPaymentFee(
+    tenantId: string,
+    orderId: string,
+    orderNumber: string,
+    op: {
+      id: string;
+      amount: unknown;
+      paymentMethodId: string;
+      paymentMethod: { name: string; feePercentage?: unknown };
+    },
+    dueDate: Date,
+  ): Promise<void> {
+    const feePercentage = Number(op.paymentMethod.feePercentage ?? 0);
+    if (!(feePercentage > 0)) return;
+
+    // Cents first, then the percentage: 699,90 × 3,19% in floats is
+    // 22.326810000000002.
+    const fee = fromCents(
+      Math.round((toCents(op.amount as number) * feePercentage) / 100),
+    );
+    if (fee <= 0) return;
+
+    await this.prisma.accountsPayable.create({
+      data: {
+        tenantId,
+        description: `Taxa ${op.paymentMethod.name} - ${orderNumber}`,
+        amount: fee,
+        status: 'PENDING',
+        dueDate,
+        paymentMethodId: op.paymentMethodId,
+        metadata: {
+          kind: PAYMENT_FEE_KIND,
+          orderId,
+          orderPaymentId: op.id,
+          feePercentage,
+        },
+      },
+    });
   }
 
   private async createNotification(

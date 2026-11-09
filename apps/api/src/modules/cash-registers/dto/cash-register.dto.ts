@@ -65,6 +65,28 @@ export class CloseSessionDto {
   @IsString()
   @MaxLength(500)
   notes?: string;
+
+  /**
+   * Fundo de troco que fica na gaveta para a próxima abertura. O que passar
+   * disso é transferido para `destinationAccountId` no mesmo fechamento —
+   * assim a conta do caixa termina o dia valendo exatamente o que ficou lá
+   * dentro, e a abertura de amanhã não precisa creditar nada.
+   */
+  @ApiPropertyOptional({
+    description: 'Fundo de troco que permanece na gaveta (default: 0)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  retainedAmount?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Conta de destino do valor que sai da gaveta. Sem ela, nada é transferido.',
+  })
+  @IsOptional()
+  @IsString()
+  destinationAccountId?: string;
 }
 
 export class CashMovementDto {

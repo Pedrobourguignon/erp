@@ -51,6 +51,22 @@ export function shouldShowCondition(type: string | null): boolean {
   return type !== null && CONDITION_TYPES.has(type);
 }
 
+// ─── Method-scoped conditions (SCRUM-52) ───────────────────────────────
+
+/**
+ * A condition with no linked methods keeps the pre-SCRUM-52 behavior: it
+ * shows up for any method that displays a condition. Linking narrows it.
+ */
+export function filterConditionsForMethod(
+  conditions: PaymentCondition[],
+  methodId: string | undefined
+): PaymentCondition[] {
+  if (!methodId) {return conditions;}
+  return conditions.filter(
+    (c) => c.paymentMethodIds.length === 0 || c.paymentMethodIds.includes(methodId)
+  );
+}
+
 // ─── Linked account (SCRUM-30) ─────────────────────────────────────────
 
 /**

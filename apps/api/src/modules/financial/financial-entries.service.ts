@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, FinancialStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { CashRegistersService } from '../cash-registers/cash-registers.service';
 import {
   CreateFinancialEntryDto,
   FinancialEntryQueryDto,
@@ -97,11 +98,18 @@ export function isOverdue(
 export class FinancialEntriesService {
   private readonly logger = new Logger(FinancialEntriesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cashRegisters: CashRegistersService,
+  ) {}
 
   // ─── Create (SCRUM-10) ──────────────────────────────────────────────────
 
-  async create(tenantId: string, dto: CreateFinancialEntryDto) {
+  async create(
+    tenantId: string,
+    dto: CreateFinancialEntryDto,
+    userId?: string,
+  ) {
     const account = await this.prisma.financialAccount.findFirst({
       where: { id: dto.accountId, tenantId },
       select: { id: true },
@@ -142,6 +150,7 @@ export class FinancialEntriesService {
 
     if (paid) {
       return this.createCashEntry(tenantId, {
+        userId,
         accountId: dto.accountId,
         chartAccountId: dto.chartAccountId,
         isRevenue,
@@ -170,6 +179,7 @@ export class FinancialEntriesService {
       amount: number;
       date: Date;
       description: string;
+      userId?: string;
     },
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
@@ -182,6 +192,20 @@ export class FinancialEntriesService {
         },
         select: { balance: true },
       });
+
+      // Uma despesa paga pela conta de um caixa aberto sai da gaveta. Sem
+      // isto, o dinheiro saía do saldo da conta e a contagem do fechamento
+      // continuava esperando a nota que já não estava lá.
+      if (input.userId) {
+        await this.cashRegisters.mirrorSettlementInDrawer(tx, {
+          tenantId,
+          accountId: input.accountId,
+          direction: input.isRevenue ? 'in' : 'out',
+          amount: input.amount,
+          reason: input.description,
+          userId: input.userId,
+        });
+      }
 
       return tx.financialTransaction.create({
         data: {

@@ -25,7 +25,11 @@ export interface CashRegisterSession {
   closedBy?: { id: string; name: string };
   cashRegister?: { id: string; name: string };
   movements?: CashMovement[];
-  /** Running totals for the session, computed by the API (getCurrentSession). */
+  /**
+   * Running totals for the session, computed by the API — vêm tanto no detalhe
+   * da sessão (`getCurrentSession`) quanto na listagem de caixas, que é onde o
+   * card lê o saldo atual.
+   */
   totals?: {
     supplies: number;
     withdrawals: number;
@@ -46,6 +50,19 @@ export interface CashMovement {
   reason: string;
   createdAt: string;
   performedBy?: { id: string; name: string };
+}
+
+/**
+ * O fechamento devolve, além da sessão, o que fez com o dinheiro contado:
+ * quanto ficou de troco e para onde foi o resto.
+ */
+export interface CloseSessionResult extends CashRegisterSession {
+  retainedAmount?: number;
+  transfer?: {
+    toAccountId: string;
+    toAccountName: string;
+    amount: number;
+  } | null;
 }
 
 export interface CashRegister {
@@ -166,14 +183,20 @@ export function useCloseCashRegister() {
       id,
       closingBalance,
       notes,
+      retainedAmount,
+      destinationAccountId,
     }: {
       id: string;
       closingBalance: number;
       notes?: string;
+      /** Fundo de troco que fica na gaveta para a abertura seguinte. */
+      retainedAmount?: number;
+      /** Destino do que sai da gaveta. Sem ele, nada é transferido. */
+      destinationAccountId?: string;
     }) => {
-      const { data } = await api.post<ApiResponse<CashRegisterSession>>(
+      const { data } = await api.post<ApiResponse<CloseSessionResult>>(
         `/cash-registers/${id}/close`,
-        { closingBalance, notes }
+        { closingBalance, notes, retainedAmount, destinationAccountId }
       );
       return data;
     },

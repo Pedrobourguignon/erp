@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
+import { CashRegistersModule } from '../cash-registers/cash-registers.module';
 import { FinancialAccountsController } from './financial-accounts.controller';
 import { FinancialAccountsService } from './financial-accounts.service';
 import { FinancialEntriesController } from './financial-entries.controller';
@@ -11,7 +12,7 @@ import { OverdueTitlesJob } from './overdue-titles.job';
 import { FinancialReversalsService } from './financial-reversals.service';
 
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, CashRegistersModule],
   controllers: [
     FinancialAccountsController,
     FinancialEntriesController,

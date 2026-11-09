@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, FinancialStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { CashRegistersService } from '../cash-registers/cash-registers.service';
 import { parseUserDate } from '../../common/utils/date-range.util';
 import {
   SettleFinancialEntryDto,
@@ -52,12 +53,16 @@ export interface SettlementResult {
 export class FinancialSettlementsService {
   private readonly logger = new Logger(FinancialSettlementsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cashRegisters: CashRegistersService,
+  ) {}
 
   async settle(
     tenantId: string,
     id: string,
     dto: SettleFinancialEntryDto,
+    userId?: string,
   ): Promise<SettlementResult> {
     const isReceivable = dto.kind === 'RECEIVABLE';
 
@@ -112,6 +117,19 @@ export class FinancialSettlementsService {
         await tx.accountsReceivable.update({ where: { id }, data });
       } else {
         await tx.accountsPayable.update({ where: { id }, data });
+      }
+
+      // A conta de um caixa aberto é a gaveta: pagar por ela tira dinheiro
+      // físico de dentro dela, e a contagem do fechamento precisa saber disso.
+      if (userId) {
+        await this.cashRegisters.mirrorSettlementInDrawer(tx, {
+          tenantId,
+          accountId,
+          direction: isReceivable ? 'in' : 'out',
+          amount: settledAmount,
+          reason: `${isReceivable ? 'Recebimento' : 'Pagamento'} - ${titulo.description}`,
+          userId,
+        });
       }
 
       return tx.financialTransaction.create({

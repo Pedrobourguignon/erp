@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { settlePayments } from "./payment-settlement";
+import { hasLineWithoutMethod, settlePayments } from "./payment-settlement";
 
 const cash = (amount: number) => ({ amount, isCash: true });
 const card = (amount: number) => ({ amount, isCash: false });
@@ -58,5 +58,22 @@ describe("settlePayments", () => {
 
   it("should treat an empty payment list as unsettled", () => {
     expect(settlePayments([], 199.8).isSettled).toBe(false);
+  });
+});
+
+describe("hasLineWithoutMethod", () => {
+  it("should be false when there are no payment lines", () => {
+    expect(hasLineWithoutMethod(undefined)).toBe(false);
+    expect(hasLineWithoutMethod([])).toBe(false);
+  });
+
+  it("should flag a line whose method was never picked", () => {
+    expect(
+      hasLineWithoutMethod([{ paymentMethodId: "pm-1" }, { paymentMethodId: "" }])
+    ).toBe(true);
+  });
+
+  it("should be false when every line has a method", () => {
+    expect(hasLineWithoutMethod([{ paymentMethodId: "pm-1" }])).toBe(false);
   });
 });

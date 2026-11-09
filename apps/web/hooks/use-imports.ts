@@ -14,9 +14,15 @@ export type ImportStatus =
   | "COMPLETED_WITH_ERRORS"
   | "FAILED";
 
+/**
+ * One entry of the report. The CSV importer only writes errors (no `severity`);
+ * the spreadsheet importer also writes warnings and file-wide notes.
+ */
 export interface ImportRowError {
   line: number;
   message: string;
+  severity?: "error" | "warning" | "info";
+  code?: string;
 }
 
 export interface ImportJob {

@@ -1,8 +1,28 @@
 import { describe, it, expect } from 'vitest';
 
+import type { PaymentCondition } from '@/hooks/use-payment-conditions';
 import type { PaymentMethod } from '@/hooks/use-payment-methods';
 
-import { requiresLinkedAccount, hasMissingAccount } from './payment-line';
+import {
+  requiresLinkedAccount,
+  hasMissingAccount,
+  filterConditionsForMethod,
+} from './payment-line';
+
+function makeCondition(overrides: Partial<PaymentCondition> = {}): PaymentCondition {
+  return {
+    id: 'pc-1',
+    name: 'A Vista',
+    code: 'AV',
+    type: 'CASH',
+    installments: 1,
+    daysBetweenInstallments: 0,
+    entryPercentage: 0,
+    isActive: true,
+    paymentMethodIds: [],
+    ...overrides,
+  };
+}
 
 function makeMethod(overrides: Partial<PaymentMethod> = {}): PaymentMethod {
   return {
@@ -88,5 +108,45 @@ describe('hasMissingAccount', () => {
 
   it('should handle an undefined payments list', () => {
     expect(hasMissingAccount(undefined, methods)).toBe(false);
+  });
+});
+
+describe('filterConditionsForMethod', () => {
+  const unlinked = makeCondition({ id: 'pc-avista', paymentMethodIds: [] });
+  const linkedToCard = makeCondition({
+    id: 'pc-12x',
+    name: '12x sem juros',
+    paymentMethodIds: ['pm-card'],
+  });
+  const linkedToBoleto = makeCondition({
+    id: 'pc-boleto-30',
+    name: 'Boleto 30 dias',
+    paymentMethodIds: ['pm-boleto'],
+  });
+  const conditions = [unlinked, linkedToCard, linkedToBoleto];
+
+  it('keeps every condition when no method is selected', () => {
+    expect(filterConditionsForMethod(conditions, undefined)).toEqual(conditions);
+  });
+
+  it('shows an unlinked condition for any method', () => {
+    expect(filterConditionsForMethod([unlinked], 'pm-card')).toEqual([unlinked]);
+    expect(filterConditionsForMethod([unlinked], 'pm-boleto')).toEqual([unlinked]);
+  });
+
+  it('shows only the conditions linked to the selected method, plus the unlinked ones', () => {
+    expect(filterConditionsForMethod(conditions, 'pm-card')).toEqual([
+      unlinked,
+      linkedToCard,
+    ]);
+  });
+
+  it('hides a condition linked to a different method', () => {
+    const result = filterConditionsForMethod(conditions, 'pm-card');
+    expect(result).not.toContainEqual(linkedToBoleto);
+  });
+
+  it('hides every linked condition when the method matches none of them', () => {
+    expect(filterConditionsForMethod(conditions, 'pm-pix')).toEqual([unlinked]);
   });
 });

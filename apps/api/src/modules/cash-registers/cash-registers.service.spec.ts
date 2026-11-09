@@ -21,6 +21,17 @@ function createMockPrisma() {
     tx,
     cashRegister: {
       findFirst: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
+    },
+    // A conta vinculada é a gaveta: a abertura compara o declarado com o que
+    // ela já acusa, e o fechamento transfere o excedente para outra conta.
+    financialAccount: {
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'acc-1',
+        name: 'Caixa 01',
+        balance: 0,
+      }),
     },
     cashRegisterSession: {
       findFirst: jest.fn(),
@@ -34,6 +45,7 @@ function createMockPrisma() {
     },
     orderPayment: {
       aggregate: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
     },
     $transaction: jest.fn(async (cb: (t: typeof tx) => unknown) => cb(tx)),
   };
@@ -444,6 +456,343 @@ describe('CashRegistersService', () => {
       await expect(
         service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, { closingBalance: 100 } as never),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── Saldo atual na listagem de caixas ──────────────────────────────────
+
+  describe('findAll — saldo corrente da sessão aberta', () => {
+    // O card da tela de caixa mostrava só o saldo de abertura: abertura de
+    // R$ 50,00, uma venda de R$ 349,90 em dinheiro e a tela seguia em R$ 50,00
+    // enquanto a gaveta (e o fechamento) contavam R$ 399,90.
+    beforeEach(() => {
+      prisma.cashRegister.findMany.mockResolvedValue([
+        {
+          id: REGISTER_ID,
+          name: 'Caixa principal',
+          sessions: [
+            {
+              id: SESSION_ID,
+              status: 'OPEN',
+              openingBalance: 50,
+              movements: [],
+            },
+          ],
+        },
+      ]);
+      prisma.cashRegister.count.mockResolvedValue(1);
+    });
+
+    it('soma as vendas em dinheiro da sessão ao saldo de abertura', async () => {
+      prisma.orderPayment.findMany.mockResolvedValue([
+        { amount: 349.9, order: { cashRegisterSessionId: SESSION_ID } },
+      ]);
+
+      const result = await service.findAll(TENANT_ID, {});
+      const [register] = result.data as {
+        sessions: { totals: { cashSales: number; currentBalance: number } }[];
+      }[];
+
+      expect(register.sessions[0].totals.cashSales).toBe(349.9);
+      expect(register.sessions[0].totals.currentBalance).toBe(399.9);
+    });
+
+    it('desconta sangrias e soma suprimentos', async () => {
+      prisma.cashRegister.findMany.mockResolvedValue([
+        {
+          id: REGISTER_ID,
+          name: 'Caixa principal',
+          sessions: [
+            {
+              id: SESSION_ID,
+              status: 'OPEN',
+              openingBalance: 50,
+              movements: [
+                { type: 'SUPPLY', amount: 100 },
+                { type: 'WITHDRAW', amount: 30 },
+              ],
+            },
+          ],
+        },
+      ]);
+      prisma.orderPayment.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll(TENANT_ID, {});
+      const [register] = result.data as {
+        sessions: { totals: { currentBalance: number } }[];
+      }[];
+
+      expect(register.sessions[0].totals.currentBalance).toBe(120);
+    });
+
+    it('não expõe as movimentações na listagem — só os totais', async () => {
+      prisma.orderPayment.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll(TENANT_ID, {});
+      const [register] = result.data as { sessions: Record<string, unknown>[] }[];
+
+      expect(register.sessions[0]).not.toHaveProperty('movements');
+    });
+
+    it('não consulta pagamentos quando nenhum caixa está aberto', async () => {
+      prisma.cashRegister.findMany.mockResolvedValue([
+        { id: REGISTER_ID, name: 'Caixa principal', sessions: [] },
+      ]);
+
+      await service.findAll(TENANT_ID, {});
+
+      expect(prisma.orderPayment.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Abrir caixa não cria dinheiro ──────────────────────────────────────
+
+  describe('openSession — crédito só do que entra de fora', () => {
+    // O fundo de troco que dormiu na gaveta já está na conta. Creditar a
+    // abertura inteira todo dia inventava R$ 50,00 por dia de dinheiro que
+    // ninguém colocou lá.
+    beforeEach(() => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        isActive: true,
+      });
+      prisma.cashRegisterSession.findFirst.mockResolvedValue(null);
+      prisma.tx.cashRegisterSession.create.mockResolvedValue({ id: SESSION_ID });
+    });
+
+    it('não credita nada quando o fundo declarado já está na conta', async () => {
+      prisma.financialAccount.findFirst.mockResolvedValue({
+        id: 'acc-1',
+        name: 'Caixa 01',
+        balance: 50,
+      });
+
+      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        openingBalance: 50,
+      });
+
+      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
+    });
+
+    it('credita só o suprimento externo quando entra dinheiro de fora', async () => {
+      prisma.financialAccount.findFirst.mockResolvedValue({
+        id: 'acc-1',
+        name: 'Caixa 01',
+        balance: 50,
+      });
+
+      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        openingBalance: 120,
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-1' },
+        data: { balance: { increment: 70 } },
+        select: { balance: true },
+      });
+    });
+
+    it('recusa abrir com menos do que a conta acusa — dinheiro saiu sem registro', async () => {
+      prisma.financialAccount.findFirst.mockResolvedValue({
+        id: 'acc-1',
+        name: 'Caixa 01',
+        balance: 399.9,
+      });
+
+      await expect(
+        service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
+          openingBalance: 50,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Fechamento leva o dinheiro do dia para o destino ───────────────────
+
+  describe('closeSession — transferência do excedente', () => {
+    beforeEach(() => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        isActive: true,
+      });
+      prisma.cashRegisterSession.findFirst.mockResolvedValue({
+        id: SESSION_ID,
+        openingBalance: 50,
+        movements: [],
+      });
+      prisma.orderPayment.aggregate.mockResolvedValue({ _sum: { amount: 349.9 } });
+      prisma.tx.cashRegisterSession.update.mockResolvedValue({ id: SESSION_ID });
+      prisma.financialAccount.findFirst.mockResolvedValue({
+        id: 'acc-banco',
+        name: 'Santander',
+      });
+    });
+
+    it('deixa na gaveta o fundo retido e transfere o resto', async () => {
+      const result = await service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        closingBalance: 399.9,
+        retainedAmount: 50,
+        destinationAccountId: 'acc-banco',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-1' },
+        data: { balance: { decrement: 349.9 } },
+        select: { balance: true },
+      });
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-banco' },
+        data: { balance: { increment: 349.9 } },
+        select: { balance: true },
+      });
+      expect(result.transfer).toMatchObject({
+        toAccountId: 'acc-banco',
+        amount: 349.9,
+      });
+      expect(result.retainedAmount).toBe(50);
+    });
+
+    it('não transfere nada quando o destino não é informado', async () => {
+      const result = await service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        closingBalance: 399.9,
+      });
+
+      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
+      expect(result.transfer).toBeNull();
+    });
+
+    it('não transfere quando o fundo retido é todo o valor contado', async () => {
+      const result = await service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        closingBalance: 399.9,
+        retainedAmount: 399.9,
+        destinationAccountId: 'acc-banco',
+      });
+
+      expect(result.transfer).toBeNull();
+      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
+    });
+
+    it('recusa um fundo de troco maior que o valor contado', async () => {
+      await expect(
+        service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, {
+          closingBalance: 100,
+          retainedAmount: 150,
+          destinationAccountId: 'acc-banco',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('recusa transferir para a conta do próprio caixa', async () => {
+      await expect(
+        service.closeSession(TENANT_ID, REGISTER_ID, USER_ID, {
+          closingBalance: 399.9,
+          retainedAmount: 50,
+          destinationAccountId: 'acc-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── A baixa de um título pela conta do caixa mexe na gaveta ────────────
+
+  describe('mirrorSettlementInDrawer', () => {
+    // Pagar o reembolso de um estorno (ou a conta de luz) pela conta do caixa
+    // tira dinheiro físico da gaveta. Sem o movimento, o fechamento contava uma
+    // gaveta que ninguém tinha mexido e acusava diferença.
+    function txWith(session: unknown) {
+      return {
+        cashRegisterSession: { findFirst: jest.fn().mockResolvedValue(session) },
+        cashRegisterMovement: {
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn().mockResolvedValue({ id: 'mov-x' }),
+        },
+        orderPayment: {
+          aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
+        },
+      };
+    }
+
+    const openSession = {
+      id: SESSION_ID,
+      openingBalance: 500,
+      cashRegister: { name: 'Caixa 01' },
+    };
+
+    it('cria a sangria correspondente ao pagamento', async () => {
+      const tx = txWith(openSession);
+
+      const result = await service.mirrorSettlementInDrawer(tx as never, {
+        tenantId: TENANT_ID,
+        accountId: 'acc-1',
+        direction: 'out',
+        amount: 200,
+        reason: 'Pagamento - Estorno de venda PED-000001',
+        userId: USER_ID,
+      });
+
+      expect(result).toEqual({ sessionId: SESSION_ID });
+      expect(tx.cashRegisterMovement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          sessionId: SESSION_ID,
+          type: 'WITHDRAW',
+          amount: 200,
+          performedById: USER_ID,
+        }),
+      });
+    });
+
+    it('registra um recebimento como suprimento', async () => {
+      const tx = txWith(openSession);
+
+      await service.mirrorSettlementInDrawer(tx as never, {
+        tenantId: TENANT_ID,
+        accountId: 'acc-1',
+        direction: 'in',
+        amount: 80,
+        reason: 'Recebimento - Título X',
+        userId: USER_ID,
+      });
+
+      expect(tx.cashRegisterMovement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ type: 'SUPPLY', amount: 80 }),
+      });
+    });
+
+    it('não faz nada quando a conta não é de um caixa aberto', async () => {
+      const tx = txWith(null);
+
+      const result = await service.mirrorSettlementInDrawer(tx as never, {
+        tenantId: TENANT_ID,
+        accountId: 'acc-banco',
+        direction: 'out',
+        amount: 200,
+        reason: 'Pagamento - Aluguel',
+        userId: USER_ID,
+      });
+
+      expect(result).toBeNull();
+      expect(tx.cashRegisterMovement.create).not.toHaveBeenCalled();
+    });
+
+    it('recusa um pagamento maior que o saldo da gaveta (FN-06)', async () => {
+      const tx = txWith(openSession);
+
+      await expect(
+        service.mirrorSettlementInDrawer(tx as never, {
+          tenantId: TENANT_ID,
+          accountId: 'acc-1',
+          direction: 'out',
+          amount: 900,
+          reason: 'Pagamento - Fornecedor',
+          userId: USER_ID,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(tx.cashRegisterMovement.create).not.toHaveBeenCalled();
     });
   });
 });

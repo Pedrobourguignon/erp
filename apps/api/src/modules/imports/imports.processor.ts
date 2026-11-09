@@ -1,12 +1,15 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { Job } from 'bullmq';
 import { ImportStatus, Prisma } from '@prisma/client';
+import { Job } from 'bullmq';
+
+import { runProductSpreadsheetImport } from '../../database/import/run-spreadsheet-import';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+
 import { parseCsv } from './csv-parser';
-import { ROW_IMPORTERS } from './row-importers';
 import { IMPORT_QUEUE } from './imports.service';
+import { ROW_IMPORTERS } from './row-importers';
 
 interface ImportJobData {
   importJobId: string;
@@ -46,6 +49,12 @@ export class ImportsProcessor extends WorkerHost {
 
     try {
       const buffer = await this.storage.getObjectBuffer(importJob.fileKey);
+
+      if (importJob.type === 'PRODUCTS' && importJob.fileName.toLowerCase().endsWith('.xlsx')) {
+        await this.processProductSpreadsheet(importJob.id, importJob.tenantId, buffer);
+        return;
+      }
+
       const rows = parseCsv(buffer.toString('utf-8'));
       const importer = ROW_IMPORTERS[importJob.type];
 
@@ -96,9 +105,36 @@ export class ImportsProcessor extends WorkerHost {
           status: 'FAILED',
           errors: [
             { line: 0, message: (err as Error).message ?? 'Falha no processamento' },
-          ] as unknown as Prisma.InputJsonValue,
+          ],
         },
       });
     }
+  }
+
+  /** The spreadsheet path imports in one transaction and reports warnings too. */
+  private async processProductSpreadsheet(
+    importJobId: string,
+    tenantId: string,
+    buffer: Buffer,
+  ): Promise<void> {
+    const outcome = await runProductSpreadsheetImport(this.prisma, tenantId, buffer);
+    let status: ImportStatus = 'COMPLETED';
+    if (outcome.errorRows > 0) {
+      status = outcome.successRows > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED';
+    }
+
+    await this.prisma.importJob.update({
+      where: { id: importJobId },
+      data: {
+        status,
+        totalRows: outcome.totalRows,
+        successRows: outcome.successRows,
+        errorRows: outcome.errorRows,
+        errors: outcome.issues as unknown as Prisma.InputJsonValue,
+      },
+    });
+    this.logger.log(
+      `Import ${importJobId} (spreadsheet) done: ${outcome.successRows} created, ${outcome.errorRows} rejected`,
+    );
   }
 }

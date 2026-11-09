@@ -245,15 +245,15 @@ export interface ReverseSaleResult {
   status: OrderStatus;
   returnedItems: number;
   refundedAmount: number;
+  /** Título do reembolso; o pagamento é feito na baixa, em /financeiro/lancamentos. */
   payableId: string | null;
-  cashWithdrawn: boolean;
 }
 
 /**
  * VD-14: undoing a finished sale — a counter sale born `COMPLETED` or a
  * delivered order being returned. Unlike a plain status change, it puts the
- * goods back in stock, undoes the receivables and takes the refund out of the
- * cash session, so it has its own endpoint.
+ * goods back in stock, cancels the receivables and abre um título de reembolso,
+ * so it has its own endpoint. O dinheiro só se move na baixa desse título.
  */
 export function useReverseSale() {
   const queryClient = useQueryClient();

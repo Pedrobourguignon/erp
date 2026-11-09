@@ -412,18 +412,6 @@ export default function CounterSalePage() {
   }, []);
 
   /**
-   * VD-18: o PDV abre pronto para o primeiro bipe.
-   *
-   * A busca era um `<input autoFocus>` sempre à vista; agora ela mora dentro do
-   * seletor, então abrir o seletor é o que devolve esse ganho. Sem isto, a
-   * primeira leitura de cada venda exigiria um F2 ou um clique — e o QA mediu
-   * exatamente esse custo por venda.
-   */
-  useEffect(() => {
-    focusSearch();
-  }, [focusSearch]);
-
-  /**
    * FN-13: "Finalizar Venda" fica no painel fixo à direita, sempre visível; o
    * campo Cliente rola junto com o carrinho. Sem isto, vender sem cliente não
    * produzia toast, requisição nem erro na tela — o botão parecia quebrado.
@@ -693,28 +681,25 @@ export default function CounterSalePage() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full table-fixed text-sm">
                       <thead className="border-b bg-muted/50">
                         <tr>
-                          <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">
+                          <th className="px-2 py-2.5 text-left font-medium text-muted-foreground">
                             Produto
                           </th>
-                          <th className="px-4 py-2.5 text-center font-medium text-muted-foreground">
-                            Estoque
-                          </th>
-                          <th className="w-32 px-4 py-2.5 text-center font-medium text-muted-foreground">
+                          <th className="w-[136px] px-2 py-2.5 text-center font-medium text-muted-foreground">
                             Qtd
                           </th>
-                          <th className="w-36 px-4 py-2.5 text-right font-medium text-muted-foreground">
+                          <th className="w-[132px] px-2 py-2.5 text-right font-medium text-muted-foreground">
                             Preço Unit.
                           </th>
-                          <th className="w-36 px-4 py-2.5 text-right font-medium text-muted-foreground">
+                          <th className="w-[132px] px-2 py-2.5 text-right font-medium text-muted-foreground">
                             Desconto
                           </th>
-                          <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">
+                          <th className="w-[88px] px-2 py-2.5 text-right font-medium text-muted-foreground">
                             Total
                           </th>
-                          <th className="w-10 px-2 py-2.5" />
+                          <th className="w-11 px-2 py-2.5" />
                         </tr>
                       </thead>
                       <tbody>
@@ -740,30 +725,33 @@ export default function CounterSalePage() {
                                 overStock && "bg-red-50 dark:bg-red-950/20"
                               )}
                             >
-                              <td className="px-4 py-3">
+                              <td className="px-2 py-3">
                                 <TruncatedText
                                   as="p"
                                   text={item?.productName}
-                                  className="max-w-[24ch] font-medium"
+                                  className="max-w-[18ch] font-medium"
                                 />
                                 <TruncatedText
                                   as="p"
                                   text={item?.sku}
-                                  className="max-w-[24ch] text-xs text-muted-foreground"
+                                  className="max-w-[18ch] text-xs text-muted-foreground"
                                 />
+                                {/* O estoque mora aqui, não numa coluna própria: com ela
+                                    a tabela passava da largura do cartão e o preço
+                                    ficava cortado dentro do campo. */}
+                                <div className="mt-1">
+                                  <StockIndicator available={stock} />
+                                </div>
                               </td>
 
-                              <td className="px-4 py-3 text-center">
-                                <StockIndicator available={stock} />
-                              </td>
-
-                              <td className="px-4 py-3">
+                              <td className="px-2 py-3">
                                 <div className="flex items-center justify-center gap-1">
                                   <Button
                                     type="button"
                                     variant="outline"
                                     size="icon"
-                                    className="h-7 w-7"
+                                    className="h-7 w-7 md:h-7 md:w-7"
+                                    aria-label="Diminuir quantidade"
                                     disabled={qty <= 1}
                                     onClick={() =>
                                       setValue(
@@ -800,7 +788,8 @@ export default function CounterSalePage() {
                                     type="button"
                                     variant="outline"
                                     size="icon"
-                                    className="h-7 w-7"
+                                    className="h-7 w-7 md:h-7 md:w-7"
+                                    aria-label="Aumentar quantidade"
                                     onClick={() =>
                                       setValue(
                                         `items.${index}.quantity`,
@@ -821,14 +810,14 @@ export default function CounterSalePage() {
                                   </p> : null}
                               </td>
 
-                              <td className="px-4 py-3">
+                              <td className="px-2 py-3">
                                 <MoneyInput
                                   name={`items.${index}.unitPrice`}
                                   control={control}
                                 />
                               </td>
 
-                              <td className="px-4 py-3">
+                              <td className="px-2 py-3">
                                 <MoneyInput
                                   name={`items.${index}.discount`}
                                   control={control}
@@ -838,7 +827,7 @@ export default function CounterSalePage() {
                                   </p> : null}
                               </td>
 
-                              <td className="px-4 py-3 text-right font-semibold">
+                              <td className="px-2 py-3 text-right font-semibold">
                                 {formatCurrency(itemTotal)}
                               </td>
 
@@ -849,7 +838,7 @@ export default function CounterSalePage() {
                                     variant="ghost"
                                     action="delete"
                                     size="icon"
-                                    className="h-7 w-7 text-muted-foreground"
+                                    className="h-7 w-7 text-muted-foreground md:h-7 md:w-7"
                                     onClick={() => remove(index)}
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />

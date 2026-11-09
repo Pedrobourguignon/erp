@@ -13,26 +13,6 @@ This document defines the rules and conventions for all code written in the Nest
 - **Use Cases**: for complex operations (involving multiple aggregates, external calls, or transactions), create dedicated use-case classes in a `use-cases/` directory inside the module.
 - **Events**: use domain events for cross-module communication. Never import one domain module into another directly. Emit events via NestJS `EventEmitter2` and subscribe in the target module.
 
-### Module Directory Example
-
-```
-src/modules/products/
-├── products.module.ts
-├── products.controller.ts
-├── products.service.ts
-├── dto/
-│   ├── create-product.dto.ts
-│   ├── update-product.dto.ts
-│   └── product-response.dto.ts
-├── entities/
-│   └── product.entity.ts
-├── use-cases/
-│   └── bulk-import-products.use-case.ts
-├── events/
-│   └── product-created.event.ts
-└── products.service.spec.ts
-```
-
 ---
 
 ## Multi-tenancy Rules (CRITICAL)
@@ -86,30 +66,10 @@ async findAll(tenantId: string, query: PaginationDto) {
 
 - Follow RESTful conventions: proper HTTP methods (`GET`, `POST`, `PATCH`, `DELETE`) and status codes (`200`, `201`, `204`, `400`, `401`, `403`, `404`, `409`, `422`, `500`).
 - All routes are prefixed with `/api/v1/`.
-- **Pagination**: accept `page` and `limit` query params. Return:
-  ```json
-  {
-    "data": [],
-    "meta": {
-      "total": 100,
-      "page": 1,
-      "limit": 20,
-      "totalPages": 5,
-      "hasMore": true
-    }
-  }
-  ```
-- **Error responses**: return a consistent shape:
-  ```json
-  {
-    "success": false,
-    "statusCode": 400,
-    "message": "Validation failed",
-    "errors": [{ "field": "email", "message": "must be a valid email" }],
-    "timestamp": "2026-03-21T10:00:00.000Z",
-    "path": "/api/v1/products"
-  }
-  ```
+- **Pagination**: accept `page` and `limit` query params; build the envelope with
+  `buildPaginatedResponse` (`common/utils/pagination.ts`) — never hand-roll it.
+- **Error responses**: the global exception filter owns the shape. Throw the typed exception and
+  let it format.
 - Use `class-validator` decorators on all DTOs.
 - Use Zod for complex validations (shared schemas live in `packages/validators`).
 
@@ -130,16 +90,6 @@ async findAll(tenantId: string, query: PaginationDto) {
   produces "11730.00", with a decimal point and no thousands separator (VD-19).
 - Sweep with:
   `grep -rn "throw new \\(Bad\\|Conflict\\|NotFound\\|Forbidden\\)" apps/api/src | grep -v "[À-ú]"`
-
-### Example
-
-```typescript
-// Correct
-throw new NotFoundException(`Product with id ${id} not found for tenant ${tenantId}`);
-
-// Wrong — never do this
-throw new Error('Product not found');
-```
 
 ---
 
@@ -278,15 +228,6 @@ Do NOT write implementation code before its corresponding test exists. The test 
 - **Unit tests** for event handlers: verify side effects (stock reservation, receivable creation, notifications).
 - **Integration tests** for controllers: use Supertest against the NestJS app.
 - Test files live next to their source: `products.service.spec.ts` beside `products.service.ts`.
-- Naming convention:
-  ```typescript
-  describe('ProductsService', () => {
-    describe('create', () => {
-      it('should create a product with valid data', () => { /* ... */ });
-      it('should throw BadRequestException when name is empty', () => { /* ... */ });
-    });
-  });
-  ```
 - **ALWAYS** test tenant isolation: confirm that querying with tenant A never returns tenant B data.
 - **ALWAYS** test permission checks: confirm that users without the required permission receive `403`.
 - **ALWAYS** test error paths: invalid input, not found, duplicate, insufficient stock, etc.

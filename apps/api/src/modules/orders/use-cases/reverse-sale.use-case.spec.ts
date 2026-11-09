@@ -29,6 +29,18 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
         totalPrice: 199.8,
       },
     ],
+    payments: [
+      {
+        id: 'pay-001',
+        amount: 199.8,
+        financialAccountId: null,
+        paymentMethod: {
+          name: 'Dinheiro',
+          type: 'CASH',
+          defaultAccountId: 'acc-caixa',
+        },
+      },
+    ],
     ...overrides,
   };
 }
@@ -56,12 +68,24 @@ function createMockPrisma() {
     },
     accountsPayable: {
       create: jest.fn().mockResolvedValue({ id: 'ap-001' }),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     cashRegisterSession: {
-      findFirst: jest.fn().mockResolvedValue({ id: 'session-001', status: 'OPEN' }),
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'session-001',
+        status: 'OPEN',
+        cashRegister: { financialAccountId: 'acc-caixa' },
+      }),
     },
     cashRegisterMovement: {
       create: jest.fn().mockResolvedValue({}),
+    },
+    // O estorno mexe na gaveta; a conta do caixa tem que acompanhar.
+    financialAccount: {
+      update: jest.fn().mockResolvedValue({ balance: 50 }),
+    },
+    financialTransaction: {
+      create: jest.fn().mockResolvedValue({ id: 'ft-001' }),
     },
     orderStatusHistory: {
       create: jest.fn().mockResolvedValue({}),
@@ -223,6 +247,22 @@ describe('ReverseSaleUseCase', () => {
     });
   });
 
+  it('should cancel the acquirer fee of the reversed sale that is still open', async () => {
+    await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, reason);
+
+    expect(prisma.accountsPayable.updateMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: TENANT_ID,
+        status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+        AND: [
+          { metadata: { path: ['kind'], equals: 'PAYMENT_FEE' } },
+          { metadata: { path: ['orderId'], equals: ORDER_ID } },
+        ],
+      },
+      data: { status: 'CANCELLED' },
+    });
+  });
+
   it('should raise a payable for what the customer had already paid', async () => {
     prisma.accountsReceivable.findMany.mockResolvedValue([
       { id: 'ar-1', paidAmount: 100, amount: 100, status: 'PAID' },
@@ -249,24 +289,6 @@ describe('ReverseSaleUseCase', () => {
   });
 
   // ─── Cash register ──────────────────────────────────────────────────
-
-  it('should withdraw the refunded amount from the open session', async () => {
-    prisma.accountsReceivable.findMany.mockResolvedValue([
-      { id: 'ar-1', paidAmount: 199.8, amount: 199.8, status: 'PAID' },
-    ]);
-
-    await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, reason);
-
-    expect(prisma.cashRegisterMovement.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        tenantId: TENANT_ID,
-        sessionId: 'session-001',
-        type: 'WITHDRAW',
-        amount: 199.8,
-        performedById: USER_ID,
-      }),
-    });
-  });
 
   it('should not touch the drawer for an order with no cash session', async () => {
     prisma.order.findFirst.mockResolvedValue(
@@ -306,5 +328,44 @@ describe('ReverseSaleUseCase', () => {
     await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, reason);
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── Quem move dinheiro é a baixa do título ─────────────────────────────
+
+  describe('estorno não movimenta dinheiro', () => {
+    // O estorno registra a obrigação; quem tira o dinheiro é a baixa em
+    // /financeiro/lancamentos, onde o operador escolhe a conta — e é lá que a
+    // gaveta é debitada, se a conta escolhida for a de um caixa aberto.
+    beforeEach(() => {
+      prisma.accountsReceivable.findMany.mockResolvedValue([
+        { id: 'ar-001', paidAmount: 349.9 },
+      ]);
+    });
+
+    it('não debita conta nenhuma', async () => {
+      await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, { reason: 'engano' });
+
+      expect(prisma.financialAccount.update).not.toHaveBeenCalled();
+      expect(prisma.financialTransaction.create).not.toHaveBeenCalled();
+    });
+
+    it('não sangra a gaveta, nem numa venda paga em dinheiro', async () => {
+      await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, { reason: 'engano' });
+
+      expect(prisma.cashRegisterMovement.create).not.toHaveBeenCalled();
+    });
+
+    it('deixa o título como a única representação do reembolso', async () => {
+      const result = await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, {
+        reason: 'engano',
+      });
+
+      expect(prisma.accountsPayable.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ amount: 349.9, status: 'PENDING' }),
+        }),
+      );
+      expect(result.payableId).toBe('ap-001');
+    });
   });
 });

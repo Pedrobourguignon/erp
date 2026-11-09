@@ -66,3 +66,14 @@ export function settlePayments(
     isSettled: Math.abs(remaining) < 0.01,
   };
 }
+
+/**
+ * A line the seller added but never gave a method to still carries the amount
+ * the form pre-filled, so the totals read "Pagamento completo" for a sale that
+ * has no way of being paid. The progress bar must not celebrate it.
+ */
+export function hasLineWithoutMethod(
+  payments: ReadonlyArray<{ paymentMethodId?: string }> | undefined
+): boolean {
+  return (payments ?? []).some((p) => !p.paymentMethodId);
+}
