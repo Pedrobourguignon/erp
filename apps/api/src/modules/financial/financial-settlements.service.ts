@@ -20,6 +20,20 @@ import {
   toMoney,
 } from '../../common/utils/money.util';
 
+type Db = PrismaService | Prisma.TransactionClient;
+
+type Titulo = Awaited<
+  ReturnType<FinancialSettlementsService['loadReceivable']>
+>;
+
+interface SettlementPlan {
+  amount: number;
+  settledAmount: number;
+  paidAmount: number;
+  isFullyPaid: boolean;
+  paidAt: Date;
+}
+
 /** Statuses a título can be settled from. */
 const SETTLEABLE_STATUSES: FinancialStatus[] = [
   'PENDING',
@@ -64,19 +78,44 @@ export class FinancialSettlementsService {
     dto: SettleFinancialEntryDto,
     userId?: string,
   ): Promise<SettlementResult> {
-    const isReceivable = dto.kind === 'RECEIVABLE';
+    const titulo = await this.loadTitulo(this.prisma, tenantId, id, dto.kind);
+    const accountId = await this.resolveAccountId(this.prisma, tenantId, titulo, dto.accountId);
+    const plan = this.planSettlement(id, titulo, dto);
 
-    const titulo = isReceivable
-      ? await this.loadReceivable(tenantId, id)
-      : await this.loadPayable(tenantId, id);
+    const transaction = await this.prisma.$transaction((tx) =>
+      this.applySettlement(tx, tenantId, id, dto.kind, titulo, accountId, plan, userId),
+    );
 
+    return this.toResult(tenantId, id, dto.kind, accountId, plan, transaction.id);
+  }
+
+  /**
+   * Mesma baixa, dentro de uma transação que o chamador já abriu — para quem
+   * cria o título e o liquida no mesmo ato (a diferença de uma troca paga no
+   * balcão). Se a baixa falhar, o título e tudo que veio antes voltam junto.
+   */
+  async settleWithin(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+    dto: SettleFinancialEntryDto,
+    userId: string,
+  ): Promise<SettlementResult> {
+    const titulo = await this.loadTitulo(tx, tenantId, id, dto.kind);
+    const accountId = await this.resolveAccountId(tx, tenantId, titulo, dto.accountId);
+    const plan = this.planSettlement(id, titulo, dto);
+    const transaction = await this.applySettlement(
+      tx, tenantId, id, dto.kind, titulo, accountId, plan, userId,
+    );
+    return this.toResult(tenantId, id, dto.kind, accountId, plan, transaction.id);
+  }
+
+  private planSettlement(id: string, titulo: Titulo, dto: SettleFinancialEntryDto) {
     if (!SETTLEABLE_STATUSES.includes(titulo.status)) {
       throw new ConflictException(
         `Título ${id} não pode ser baixado (status atual: ${titulo.status})`,
       );
     }
-
-    const accountId = await this.resolveAccountId(tenantId, titulo, dto.accountId);
 
     // FN-28: money is added and subtracted in cents, never as raw floats.
     const amount = toMoney(titulo.amount);
@@ -96,78 +135,107 @@ export class FinancialSettlementsService {
     // timezone); an ISO instant sent by an integration is kept as it is.
     const paidAt = dto.paidAt ? parseUserDate(dto.paidAt) : new Date();
 
-    const transaction = await this.prisma.$transaction(async (tx) => {
-      const account = await tx.financialAccount.update({
-        where: { id: accountId },
-        data: {
-          balance: isReceivable
-            ? { increment: settledAmount }
-            : { decrement: settledAmount },
-        },
-        select: { balance: true },
-      });
+    return { amount, settledAmount, paidAmount, isFullyPaid, paidAt };
+  }
 
-      const data = {
-        paidAmount,
-        status: (isFullyPaid ? 'PAID' : 'PARTIALLY_PAID') as FinancialStatus,
-        paidAt: isFullyPaid ? paidAt : null,
-      };
+  private async applySettlement(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+    kind: SettleableKind,
+    titulo: Titulo,
+    accountId: string,
+    plan: SettlementPlan,
+    userId?: string,
+  ) {
+    const isReceivable = kind === 'RECEIVABLE';
+    const { settledAmount, paidAmount, isFullyPaid, paidAt } = plan;
 
-      if (isReceivable) {
-        await tx.accountsReceivable.update({ where: { id }, data });
-      } else {
-        await tx.accountsPayable.update({ where: { id }, data });
-      }
-
-      // A conta de um caixa aberto é a gaveta: pagar por ela tira dinheiro
-      // físico de dentro dela, e a contagem do fechamento precisa saber disso.
-      if (userId) {
-        await this.cashRegisters.mirrorSettlementInDrawer(tx, {
-          tenantId,
-          accountId,
-          direction: isReceivable ? 'in' : 'out',
-          amount: settledAmount,
-          reason: `${isReceivable ? 'Recebimento' : 'Pagamento'} - ${titulo.description}`,
-          userId,
-        });
-      }
-
-      return tx.financialTransaction.create({
-        data: {
-          tenantId,
-          accountId,
-          type: isReceivable ? 'CREDIT' : 'DEBIT',
-          amount: settledAmount,
-          balanceAfter: account.balance,
-          description: `${isReceivable ? 'Recebimento' : 'Pagamento'} - ${titulo.description}`,
-          chartAccountId: titulo.chartAccountId,
-          referenceType: isReceivable ? 'receivable' : 'payable',
-          referenceId: id,
-          createdAt: paidAt,
-        },
-      });
+    const account = await tx.financialAccount.update({
+      where: { id: accountId },
+      data: {
+        balance: isReceivable
+          ? { increment: settledAmount }
+          : { decrement: settledAmount },
+      },
+      select: { balance: true },
     });
 
+    const data = {
+      paidAmount,
+      status: (isFullyPaid ? 'PAID' : 'PARTIALLY_PAID') as FinancialStatus,
+      paidAt: isFullyPaid ? paidAt : null,
+    };
+
+    if (isReceivable) {
+      await tx.accountsReceivable.update({ where: { id }, data });
+    } else {
+      await tx.accountsPayable.update({ where: { id }, data });
+    }
+
+    // A conta de um caixa aberto é a gaveta: pagar por ela tira dinheiro
+    // físico de dentro dela, e a contagem do fechamento precisa saber disso.
+    if (userId) {
+      await this.cashRegisters.mirrorSettlementInDrawer(tx, {
+        tenantId,
+        accountId,
+        direction: isReceivable ? 'in' : 'out',
+        amount: settledAmount,
+        reason: `${isReceivable ? 'Recebimento' : 'Pagamento'} - ${titulo.description}`,
+        userId,
+      });
+    }
+
+    return tx.financialTransaction.create({
+      data: {
+        tenantId,
+        accountId,
+        type: isReceivable ? 'CREDIT' : 'DEBIT',
+        amount: settledAmount,
+        balanceAfter: account.balance,
+        description: `${isReceivable ? 'Recebimento' : 'Pagamento'} - ${titulo.description}`,
+        chartAccountId: titulo.chartAccountId,
+        referenceType: isReceivable ? 'receivable' : 'payable',
+        referenceId: id,
+        createdAt: paidAt,
+      },
+    });
+  }
+
+  private toResult(
+    tenantId: string,
+    id: string,
+    kind: SettleableKind,
+    accountId: string,
+    plan: SettlementPlan,
+    transactionId: string,
+  ): SettlementResult {
     this.logger.log(
-      `Settled ${dto.kind} ${id}: ${settledAmount} on account ${accountId} (tenant ${tenantId})`,
+      `Settled ${kind} ${id}: ${plan.settledAmount} on account ${accountId} (tenant ${tenantId})`,
     );
 
     return {
-      kind: dto.kind,
+      kind,
       id,
-      status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
-      amount,
-      paidAmount,
-      settledAmount,
+      status: plan.isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+      amount: plan.amount,
+      paidAmount: plan.paidAmount,
+      settledAmount: plan.settledAmount,
       accountId,
-      transactionId: transaction.id,
+      transactionId,
     };
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────
 
-  private async loadReceivable(tenantId: string, id: string) {
-    const receivable = await this.prisma.accountsReceivable.findFirst({
+  private loadTitulo(db: Db, tenantId: string, id: string, kind: SettleableKind) {
+    return kind === 'RECEIVABLE'
+      ? this.loadReceivable(db, tenantId, id)
+      : this.loadPayable(db, tenantId, id);
+  }
+
+  private async loadReceivable(db: Db, tenantId: string, id: string) {
+    const receivable = await db.accountsReceivable.findFirst({
       where: { id, tenantId },
       select: {
         id: true,
@@ -195,8 +263,8 @@ export class FinancialSettlementsService {
     return receivable;
   }
 
-  private async loadPayable(tenantId: string, id: string) {
-    const payable = await this.prisma.accountsPayable.findFirst({
+  private async loadPayable(db: Db, tenantId: string, id: string) {
+    const payable = await db.accountsPayable.findFirst({
       where: { id, tenantId },
       select: {
         id: true,
@@ -224,6 +292,7 @@ export class FinancialSettlementsService {
    * account a manual entry was booked against.
    */
   private async resolveAccountId(
+    db: Db,
     tenantId: string,
     titulo: {
       metadata: Prisma.JsonValue;
@@ -236,7 +305,7 @@ export class FinancialSettlementsService {
     requestedAccountId?: string,
   ): Promise<string> {
     if (requestedAccountId) {
-      const account = await this.prisma.financialAccount.findFirst({
+      const account = await db.financialAccount.findFirst({
         where: { id: requestedAccountId, tenantId },
         select: { id: true },
       });

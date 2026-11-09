@@ -67,6 +67,11 @@ enum MovementReason {
   COUNT
 }
 
+enum OrderAdjustmentType {
+  EXCHANGE
+  RETURN
+}
+
 enum OrderStatus {
   DRAFT
   PENDING
@@ -291,7 +296,7 @@ enum ImportStatus {
 model Tenant {
   id        String       @id @default(cuid())
   name      String
-  document  String       // CNPJ
+  document  String // CNPJ
   email     String
   phone     String?
   plan      TenantPlan   @default(TRIAL)
@@ -308,50 +313,51 @@ model Tenant {
   settings Json @default("{}")
 
   // Endereço
-  addressStreet  String?
-  addressNumber  String?
-  addressComplement String?
+  addressStreet       String?
+  addressNumber       String?
+  addressComplement   String?
   addressNeighborhood String?
-  addressCity    String?
-  addressState   String?
-  addressZipCode String?
+  addressCity         String?
+  addressState        String?
+  addressZipCode      String?
 
   trialEndsAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  users                User[]
-  roles                Role[]
-  products             Product[]
-  categories           Category[]
-  brands               Brand[]
-  suppliers            Supplier[]
-  warehouses           Warehouse[]
-  orders               Order[]
-  quotations           Quotation[]
-  purchaseOrders       PurchaseOrder[]
-  financialAccounts    FinancialAccount[]
-  accountsReceivable   AccountsReceivable[]
-  accountsPayable      AccountsPayable[]
-  financialTransactions FinancialTransaction[]
-  invoices             Invoice[]
-  taxRules             TaxRule[]
-  cfops                Cfop[]
-  customers            Customer[]
-  leads                Lead[]
+  users                  User[]
+  roles                  Role[]
+  products               Product[]
+  categories             Category[]
+  brands                 Brand[]
+  suppliers              Supplier[]
+  warehouses             Warehouse[]
+  orders                 Order[]
+  quotations             Quotation[]
+  purchaseOrders         PurchaseOrder[]
+  financialAccounts      FinancialAccount[]
+  accountsReceivable     AccountsReceivable[]
+  accountsPayable        AccountsPayable[]
+  financialTransactions  FinancialTransaction[]
+  invoices               Invoice[]
+  taxRules               TaxRule[]
+  cfops                  Cfop[]
+  customers              Customer[]
+  leads                  Lead[]
   marketplaceConnections MarketplaceConnection[]
-  notifications        Notification[]
-  salesChannels        SalesChannel[]
-  costCenters          CostCenter[]
-  chartOfAccounts      ChartOfAccounts[]
-  auditLogs            AuditLog[]
-  paymentMethods       PaymentMethod[]
-  paymentConditions    PaymentCondition[]
-  orderPayments        OrderPayment[]
-  cashRegisters        CashRegister[]
-  cashRegisterSessions CashRegisterSession[]
-  cashRegisterMovements CashRegisterMovement[]
+  notifications          Notification[]
+  salesChannels          SalesChannel[]
+  costCenters            CostCenter[]
+  chartOfAccounts        ChartOfAccounts[]
+  auditLogs              AuditLog[]
+  paymentMethods         PaymentMethod[]
+  paymentConditions      PaymentCondition[]
+  orderPayments          OrderPayment[]
+  orderAdjustments       OrderAdjustment[]
+  cashRegisters          CashRegister[]
+  cashRegisterSessions   CashRegisterSession[]
+  cashRegisterMovements  CashRegisterMovement[]
 
   @@index([document])
   @@index([status])
@@ -360,34 +366,34 @@ model Tenant {
 
 /// Usuários do sistema com vínculo a um tenant
 model User {
-  id        String     @id @default(cuid())
-  tenantId  String
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  email     String
-  password  String     // bcrypt hash
-  name      String
-  avatar    String?
-  phone     String?
-  status    UserStatus @default(ACTIVE)
+  email    String
+  password String // bcrypt hash
+  name     String
+  avatar   String?
+  phone    String?
+  status   UserStatus @default(ACTIVE)
 
   lastLoginAt DateTime?
   lastLoginIp String?
 
-  roleId    String?
-  role      Role?      @relation(fields: [roleId], references: [id])
+  roleId String?
+  role   Role?   @relation(fields: [roleId], references: [id])
 
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  orders           Order[]
-  auditLogs        AuditLog[]
-  inventoryMovements InventoryMovement[]
-  customerInteractions CustomerInteraction[]
-  notifications    Notification[]
-  cashSessionsOperated  CashRegisterSession[] @relation("SessionOperator")
-  cashSessionsClosed    CashRegisterSession[] @relation("SessionCloser")
+  orders                 Order[]
+  auditLogs              AuditLog[]
+  inventoryMovements     InventoryMovement[]
+  customerInteractions   CustomerInteraction[]
+  notifications          Notification[]
+  cashSessionsOperated   CashRegisterSession[]  @relation("SessionOperator")
+  cashSessionsClosed     CashRegisterSession[]  @relation("SessionCloser")
   cashMovementsPerformed CashRegisterMovement[] @relation("MovementPerformedBy")
 
   @@unique([tenantId, email])
@@ -398,16 +404,16 @@ model User {
 
 /// Papéis de acesso por tenant
 model Role {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name        String   // owner, admin, manager, seller, warehouse, financial, viewer
+  name        String // owner, admin, manager, seller, warehouse, financial, viewer
   description String?
-  isSystem    Boolean  @default(false) // roles padrão não podem ser deletados
+  isSystem    Boolean @default(false) // roles padrão não podem ser deletados
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   users       User[]
   permissions RolePermission[]
@@ -445,26 +451,26 @@ model RolePermission {
 
 /// Log de auditoria para rastreio completo
 model AuditLog {
-  id        String      @id @default(cuid())
-  tenantId  String
-  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  userId    String?
-  user      User?       @relation(fields: [userId], references: [id])
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
 
-  entity    String      // nome da tabela
-  entityId  String      // ID do registro
-  action    AuditAction
+  entity   String // nome da tabela
+  entityId String // ID do registro
+  action   AuditAction
 
-  oldData   Json?       // dados antes da alteração
-  newData   Json?       // dados depois da alteração
-  diff      Json?       // diff calculado
+  oldData Json? // dados antes da alteração
+  newData Json? // dados depois da alteração
+  diff    Json? // diff calculado
 
   ip        String?
   userAgent String?
-  metadata  Json?       // dados extras
+  metadata  Json? // dados extras
 
-  createdAt DateTime    @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, entity, entityId])
   @@index([tenantId, userId])
@@ -478,21 +484,21 @@ model AuditLog {
 
 /// Categorias de produtos (hierárquica)
 model Category {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name      String
-  slug      String
-  parentId  String?
-  parent    Category? @relation("CategoryTree", fields: [parentId], references: [id])
-  children  Category[] @relation("CategoryTree")
+  name     String
+  slug     String
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  products  Product[]
+  products Product[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -501,18 +507,18 @@ model Category {
 
 /// Marcas
 model Brand {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name      String
-  logo      String?
+  name String
+  logo String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  products  Product[]
+  products Product[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -521,16 +527,16 @@ model Brand {
 
 /// Fornecedores
 model Supplier {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name         String
-  tradeName    String?  // nome fantasia
-  document     String   // CNPJ/CPF
-  email        String?
-  phone        String?
-  website      String?
+  name      String
+  tradeName String? // nome fantasia
+  document  String // CNPJ/CPF
+  email     String?
+  phone     String?
+  website   String?
 
   addressStreet  String?
   addressNumber  String?
@@ -538,11 +544,11 @@ model Supplier {
   addressState   String?
   addressZipCode String?
 
-  notes     String?
-  metadata  Json?
+  notes    String?
+  metadata Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   products        Product[]
@@ -561,47 +567,47 @@ model SupplierContact {
   supplierId String
   supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
 
-  name       String
-  email      String?
-  phone      String?
-  role       String?  // compras, financeiro, etc.
+  name  String
+  email String?
+  phone String?
+  role  String? // compras, financeiro, etc.
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("supplier_contacts")
 }
 
 /// Produto principal
 model Product {
-  id        String        @id @default(cuid())
-  tenantId  String
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  sku       String
-  name      String
+  sku         String
+  name        String
   description String?
-  type      ProductType   @default(SIMPLE)
-  status    ProductStatus @default(DRAFT)
+  type        ProductType   @default(SIMPLE)
+  status      ProductStatus @default(DRAFT)
 
   // Códigos fiscais
-  ean       String?       // EAN/GTIN (código de barras)
-  ncm       String?       // NCM (classificação fiscal)
-  cest      String?       // CEST
+  ean  String? // EAN/GTIN (código de barras)
+  ncm  String? // NCM (classificação fiscal)
+  cest String? // CEST
   // AE-08: sem CFOP não se emite NF-e de venda. O campo não existia em nenhuma aba.
-  cfop      String?       @db.VarChar(4)
+  cfop String? @db.VarChar(4)
 
   // Preços
-  costPrice    Decimal  @default(0) @db.Decimal(15, 4)
-  salePrice    Decimal  @default(0) @db.Decimal(15, 4)
-  promoPrice   Decimal? @db.Decimal(15, 4)
-  markup       Decimal? @db.Decimal(10, 4)
+  costPrice  Decimal  @default(0) @db.Decimal(15, 4)
+  salePrice  Decimal  @default(0) @db.Decimal(15, 4)
+  promoPrice Decimal? @db.Decimal(15, 4)
+  markup     Decimal? @db.Decimal(10, 4)
 
   // Dimensões e peso
-  weight    Decimal? @db.Decimal(10, 3) // kg
-  height    Decimal? @db.Decimal(10, 2) // cm
-  width     Decimal? @db.Decimal(10, 2)
-  length    Decimal? @db.Decimal(10, 2)
+  weight Decimal? @db.Decimal(10, 3) // kg
+  height Decimal? @db.Decimal(10, 2) // cm
+  width  Decimal? @db.Decimal(10, 2)
+  length Decimal? @db.Decimal(10, 2)
 
   // Estoque
   // Mínimo padrão do produto: semeia o minStock de cada InventoryItem criado.
@@ -620,20 +626,20 @@ model Product {
   searchVector String? // tsvector será gerenciado via raw SQL
 
   // Metadados flexíveis
-  metadata  Json?
+  metadata Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  variants           ProductVariant[]
-  images             ProductImage[]
-  inventoryItems     InventoryItem[]
-  inventoryMovements InventoryMovement[]
-  stockAlerts        StockAlert[]
-  orderItems         OrderItem[]
-  quotationItems     QuotationItem[]
-  purchaseOrderItems PurchaseOrderItem[]
+  variants            ProductVariant[]
+  images              ProductImage[]
+  inventoryItems      InventoryItem[]
+  inventoryMovements  InventoryMovement[]
+  stockAlerts         StockAlert[]
+  orderItems          OrderItem[]
+  quotationItems      QuotationItem[]
+  purchaseOrderItems  PurchaseOrderItem[]
   marketplaceListings MarketplaceListing[]
 
   @@unique([tenantId, sku])
@@ -646,26 +652,26 @@ model Product {
 
 /// Variantes de produto (cor, tamanho, etc.)
 model ProductVariant {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  sku       String
-  name      String   // Ex: "Azul - M"
-  ean       String?
+  sku  String
+  name String // Ex: "Azul - M"
+  ean  String?
 
-  costPrice  Decimal? @db.Decimal(15, 4)
-  salePrice  Decimal? @db.Decimal(15, 4)
+  costPrice Decimal? @db.Decimal(15, 4)
+  salePrice Decimal? @db.Decimal(15, 4)
 
   // Atributos da variação
-  attributes Json    // { "cor": "Azul", "tamanho": "M" }
+  attributes Json // { "cor": "Azul", "tamanho": "M" }
 
-  weight    Decimal? @db.Decimal(10, 3)
-  height    Decimal? @db.Decimal(10, 2)
-  width     Decimal? @db.Decimal(10, 2)
-  length    Decimal? @db.Decimal(10, 2)
+  weight Decimal? @db.Decimal(10, 3)
+  height Decimal? @db.Decimal(10, 2)
+  width  Decimal? @db.Decimal(10, 2)
+  length Decimal? @db.Decimal(10, 2)
 
-  isActive  Boolean  @default(true)
+  isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -679,14 +685,14 @@ model ProductVariant {
 
 /// Imagens do produto
 model ProductImage {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  url       String
-  key       String   // chave no S3/MinIO
-  position  Int      @default(0)
-  isMain    Boolean  @default(false)
+  url      String
+  key      String // chave no S3/MinIO
+  position Int     @default(0)
+  isMain   Boolean @default(false)
 
   createdAt DateTime @default(now())
 
@@ -696,9 +702,9 @@ model ProductImage {
 
 /// Depósitos / Armazéns
 model Warehouse {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   name      String
   code      String
@@ -706,19 +712,19 @@ model Warehouse {
   // AE-12b: o DTO já recebia cidade/UF/CEP e o serviço os concatenava dentro de
   // `address`, jogando fora a estrutura — o card exibia ", -" porque lia campos
   // que nunca existiram.
-  city      String?  @db.VarChar(100)
-  state     String?  @db.VarChar(2)
-  zipCode   String?  @db.VarChar(10)
-  isDefault Boolean  @default(false)
-  isActive  Boolean  @default(true)
+  city      String? @db.VarChar(100)
+  state     String? @db.VarChar(2)
+  zipCode   String? @db.VarChar(10)
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  inventoryItems  InventoryItem[]
-  movementsFrom   InventoryMovement[] @relation("MovementFrom")
-  movementsTo     InventoryMovement[] @relation("MovementTo")
-  stockAlerts     StockAlert[]
+  inventoryItems InventoryItem[]
+  movementsFrom  InventoryMovement[] @relation("MovementFrom")
+  movementsTo    InventoryMovement[] @relation("MovementTo")
+  stockAlerts    StockAlert[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -727,28 +733,28 @@ model Warehouse {
 
 /// Estoque por produto/variante e depósito
 model InventoryItem {
-  id          String   @id @default(cuid())
-  tenantId    String
+  id       String @id @default(cuid())
+  tenantId String
 
   productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   variantId   String?
   variant     ProductVariant? @relation(fields: [variantId], references: [id])
   warehouseId String
-  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id])
 
-  quantity    Int      @default(0) // estoque total
-  reserved    Int      @default(0) // reservado por pedidos
-  available   Int      @default(0) // quantity - reserved
-  minStock    Int      @default(0)
-  maxStock    Int?
+  quantity  Int  @default(0) // estoque total
+  reserved  Int  @default(0) // reservado por pedidos
+  available Int  @default(0) // quantity - reserved
+  minStock  Int  @default(0)
+  maxStock  Int?
 
-  costAverage Decimal  @default(0) @db.Decimal(15, 4) // custo médio
+  costAverage Decimal @default(0) @db.Decimal(15, 4) // custo médio
 
   lastCountAt DateTime? // última contagem de inventário
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([productId, variantId, warehouseId])
   @@index([tenantId])
@@ -759,33 +765,33 @@ model InventoryItem {
 
 /// Movimentações de estoque (rastreio completo)
 model InventoryMovement {
-  id            String         @id @default(cuid())
-  tenantId      String
+  id       String @id @default(cuid())
+  tenantId String
 
-  productId     String
-  product       Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variantId     String?
-  type          MovementType
-  reason        MovementReason
+  productId String
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String?
+  type      MovementType
+  reason    MovementReason
 
-  quantity      Int
-  unitCost      Decimal?       @db.Decimal(15, 4)
-  totalCost     Decimal?       @db.Decimal(15, 4)
+  quantity  Int
+  unitCost  Decimal? @db.Decimal(15, 4)
+  totalCost Decimal? @db.Decimal(15, 4)
 
   fromWarehouseId String?
-  fromWarehouse   Warehouse?   @relation("MovementFrom", fields: [fromWarehouseId], references: [id])
+  fromWarehouse   Warehouse? @relation("MovementFrom", fields: [fromWarehouseId], references: [id])
   toWarehouseId   String?
-  toWarehouse     Warehouse?   @relation("MovementTo", fields: [toWarehouseId], references: [id])
+  toWarehouse     Warehouse? @relation("MovementTo", fields: [toWarehouseId], references: [id])
 
   // Referência (pedido, compra, ajuste)
-  referenceType String?        // order, purchase_order, adjustment
+  referenceType String? // order, purchase_order, adjustment
   referenceId   String?
 
-  notes         String?
-  userId        String?
-  user          User?          @relation(fields: [userId], references: [id])
+  notes  String?
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
 
-  createdAt     DateTime       @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, productId])
   @@index([tenantId, createdAt])
@@ -795,21 +801,21 @@ model InventoryMovement {
 
 /// Alertas de estoque
 model StockAlert {
-  id          String   @id @default(cuid())
-  tenantId    String
+  id       String @id @default(cuid())
+  tenantId String
 
   productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
   variantId   String?
   warehouseId String
   warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
 
-  currentQty  Int
-  minStock    Int
-  isResolved  Boolean  @default(false)
-  resolvedAt  DateTime?
+  currentQty Int
+  minStock   Int
+  isResolved Boolean   @default(false)
+  resolvedAt DateTime?
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, isResolved])
   @@map("stock_alerts")
@@ -821,21 +827,21 @@ model StockAlert {
 
 /// Canais de venda configurados
 model SalesChannel {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name      String
-  type      OrderOrigin
-  isActive  Boolean  @default(true)
+  name     String
+  type     OrderOrigin
+  isActive Boolean     @default(true)
 
   // Configurações específicas do canal
-  settings  Json     @default("{}")
+  settings Json @default("{}")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders    Order[]
+  orders Order[]
 
   @@index([tenantId])
   @@map("sales_channels")
@@ -843,25 +849,25 @@ model SalesChannel {
 
 /// Pedidos de venda
 model Order {
-  id            String      @id @default(cuid())
-  tenantId      String
-  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  orderNumber   String      // número sequencial por tenant
-  status        OrderStatus @default(DRAFT)
-  origin        OrderOrigin @default(MANUAL)
+  orderNumber String // número sequencial por tenant
+  status      OrderStatus @default(DRAFT)
+  origin      OrderOrigin @default(MANUAL)
 
   // Cliente
-  customerId    String?
-  customer      Customer?   @relation(fields: [customerId], references: [id])
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
 
   // Canal
   salesChannelId String?
   salesChannel   SalesChannel? @relation(fields: [salesChannelId], references: [id])
 
   // Vendedor
-  sellerId      String?
-  seller        User?       @relation(fields: [sellerId], references: [id])
+  sellerId String?
+  seller   User?   @relation(fields: [sellerId], references: [id])
 
   // Sessão de caixa (venda de balcão) — vincula a venda em dinheiro à sessão
   // aberta no momento da criação, para conciliação do caixa no fechamento.
@@ -870,41 +876,42 @@ model Order {
 
   // Marketplace
   marketplaceOrderId String? // ID do pedido no marketplace
-  marketplaceData    Json?   // dados extras do marketplace
+  marketplaceData    Json? // dados extras do marketplace
 
   // Valores
-  subtotal      Decimal     @default(0) @db.Decimal(15, 2)
-  discount      Decimal     @default(0) @db.Decimal(15, 2)
-  shippingCost  Decimal     @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal     @default(0) @db.Decimal(15, 2)
+  subtotal     Decimal @default(0) @db.Decimal(15, 2)
+  discount     Decimal @default(0) @db.Decimal(15, 2)
+  shippingCost Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount  Decimal @default(0) @db.Decimal(15, 2)
 
   // Frete
-  shippingMethod   String?
-  trackingCode     String?
-  trackingUrl      String?
-  shippedAt        DateTime?
-  deliveredAt      DateTime?
+  shippingMethod    String?
+  trackingCode      String?
+  trackingUrl       String?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
   estimatedDelivery DateTime?
 
   // Endereço de entrega
-  shippingAddress  Json?
+  shippingAddress Json?
 
   notes         String?
   internalNotes String?
   metadata      Json?
 
-  cancelledAt   DateTime?
-  cancelReason  String?
+  cancelledAt  DateTime?
+  cancelReason String?
 
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  deletedAt     DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  items          OrderItem[]
-  statusHistory  OrderStatusHistory[]
-  invoices       Invoice[]
-  receivables    AccountsReceivable[]
-  payments       OrderPayment[]
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  invoices      Invoice[]
+  receivables   AccountsReceivable[]
+  payments      OrderPayment[]
+  adjustments   OrderAdjustment[]
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, status])
@@ -918,27 +925,27 @@ model Order {
 
 /// Itens do pedido
 model OrderItem {
-  id        String   @id @default(cuid())
-  orderId   String
-  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   productId String
-  product   Product  @relation(fields: [productId], references: [id])
+  product   Product         @relation(fields: [productId], references: [id])
   variantId String?
   variant   ProductVariant? @relation(fields: [variantId], references: [id])
 
-  sku       String
-  name      String
-  quantity  Int
-  unitPrice Decimal  @db.Decimal(15, 2)
-  discount  Decimal  @default(0) @db.Decimal(15, 2)
+  sku        String
+  name       String
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(15, 2)
+  discount   Decimal @default(0) @db.Decimal(15, 2)
   totalPrice Decimal @db.Decimal(15, 2)
 
   // Fiscal
-  ncm       String?
-  cfop      String?
+  ncm  String?
+  cfop String?
 
-  metadata  Json?
+  metadata Json?
 
   @@index([orderId])
   @@index([productId])
@@ -947,44 +954,93 @@ model OrderItem {
 
 /// Histórico de status do pedido
 model OrderStatusHistory {
-  id        String      @id @default(cuid())
-  orderId   String
-  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   fromStatus OrderStatus?
   toStatus   OrderStatus
   notes      String?
-  changedBy  String?     // userId
+  changedBy  String? // userId
 
-  createdAt  DateTime    @default(now())
+  createdAt DateTime @default(now())
 
   @@index([orderId])
   @@map("order_status_history")
 }
 
+/// Troca ou devolução de um item de pedido já vendido.
+///
+/// A linha do pedido passa a refletir o que o cliente ficou levando; este
+/// registro guarda o que saiu, o que entrou e quanto isso custou — é a única
+/// memória do item original depois da troca.
+model OrderAdjustment {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderId  String
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  type     OrderAdjustmentType
+  quantity Int
+
+  // O que saiu (cópia: a linha original pode deixar de existir)
+  orderItemId       String
+  returnedProductId String
+  returnedVariantId String?
+  returnedSku       String
+  returnedName      String
+  returnedGross     Decimal @db.Decimal(15, 2)
+  discountShare     Decimal @default(0) @db.Decimal(15, 2)
+  returnedValue     Decimal @db.Decimal(15, 2)
+
+  // O que entrou (só na troca)
+  newOrderItemId String?
+  newProductId   String?
+  newVariantId   String?
+  newSku         String?
+  newName        String?
+  newUnitPrice   Decimal? @db.Decimal(15, 2)
+  newValue       Decimal  @default(0) @db.Decimal(15, 2)
+
+  /// > 0: cliente pagou a mais. < 0: a loja devolveu.
+  difference   Decimal @db.Decimal(15, 2)
+  /// Parte da devolução abatida de títulos ainda em aberto do pedido.
+  abatedAmount Decimal @default(0) @db.Decimal(15, 2)
+  receivableId String?
+  payableId    String?
+
+  reason      String?  @db.VarChar(500)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, orderId])
+  @@map("order_adjustments")
+}
+
 /// Orçamentos
 model Quotation {
-  id            String          @id @default(cuid())
-  tenantId      String
-  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   quotationNumber String
-  status        QuotationStatus @default(DRAFT)
-  customerId    String?
-  customer      Customer?       @relation(fields: [customerId], references: [id])
+  status          QuotationStatus @default(DRAFT)
+  customerId      String?
+  customer        Customer?       @relation(fields: [customerId], references: [id])
 
-  subtotal      Decimal         @default(0) @db.Decimal(15, 2)
-  discount      Decimal         @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal         @default(0) @db.Decimal(15, 2)
+  subtotal    Decimal @default(0) @db.Decimal(15, 2)
+  discount    Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount Decimal @default(0) @db.Decimal(15, 2)
 
-  validUntil    DateTime?
-  notes         String?
+  validUntil DateTime?
+  notes      String?
 
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  deletedAt     DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  items         QuotationItem[]
+  items QuotationItem[]
 
   @@unique([tenantId, quotationNumber])
   @@index([tenantId])
@@ -993,17 +1049,17 @@ model Quotation {
 
 /// Itens do orçamento
 model QuotationItem {
-  id           String    @id @default(cuid())
-  quotationId  String
-  quotation    Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
 
-  productId    String
-  product      Product   @relation(fields: [productId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
 
-  quantity     Int
-  unitPrice    Decimal   @db.Decimal(15, 2)
-  discount     Decimal   @default(0) @db.Decimal(15, 2)
-  totalPrice   Decimal   @db.Decimal(15, 2)
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(15, 2)
+  discount   Decimal @default(0) @db.Decimal(15, 2)
+  totalPrice Decimal @db.Decimal(15, 2)
 
   @@map("quotation_items")
 }
@@ -1014,34 +1070,34 @@ model QuotationItem {
 
 /// Ordens de compra
 model PurchaseOrder {
-  id            String              @id @default(cuid())
-  tenantId      String
-  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  orderNumber   String
-  status        PurchaseOrderStatus @default(DRAFT)
+  orderNumber String
+  status      PurchaseOrderStatus @default(DRAFT)
 
-  supplierId    String
-  supplier      Supplier            @relation(fields: [supplierId], references: [id])
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
 
-  subtotal      Decimal             @default(0) @db.Decimal(15, 2)
-  discount      Decimal             @default(0) @db.Decimal(15, 2)
-  shippingCost  Decimal             @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal             @default(0) @db.Decimal(15, 2)
+  subtotal     Decimal @default(0) @db.Decimal(15, 2)
+  discount     Decimal @default(0) @db.Decimal(15, 2)
+  shippingCost Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount  Decimal @default(0) @db.Decimal(15, 2)
 
-  expectedDate  DateTime?
-  receivedDate  DateTime?
-  notes         String?
+  expectedDate DateTime?
+  receivedDate DateTime?
+  notes        String?
 
-  approvedBy    String?
-  approvedAt    DateTime?
+  approvedBy String?
+  approvedAt DateTime?
 
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  deletedAt     DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
-  items         PurchaseOrderItem[]
-  payables      AccountsPayable[]
+  items    PurchaseOrderItem[]
+  payables AccountsPayable[]
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId])
@@ -1055,13 +1111,13 @@ model PurchaseOrderItem {
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
 
-  productId       String
-  product         Product       @relation(fields: [productId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
 
-  quantity        Int
-  receivedQty     Int           @default(0)
-  unitCost        Decimal       @db.Decimal(15, 4)
-  totalCost       Decimal       @db.Decimal(15, 4)
+  quantity    Int
+  receivedQty Int     @default(0)
+  unitCost    Decimal @db.Decimal(15, 4)
+  totalCost   Decimal @db.Decimal(15, 4)
 
   @@map("purchase_order_items")
 }
@@ -1072,31 +1128,31 @@ model PurchaseOrderItem {
 
 /// Contas bancárias e caixas
 model FinancialAccount {
-  id                String          @id @default(cuid())
-  tenantId          String
-  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name              String
-  type              BankAccountType
-  code              String?         @db.VarChar(20)
-  bankName          String?
-  bankBranch        String?
-  bankAccount       String?
-  balance           Decimal         @default(0) @db.Decimal(15, 2)
-  isActive          Boolean         @default(true)
-  acceptsDirectSales Boolean        @default(false)
+  name               String
+  type               BankAccountType
+  code               String?         @db.VarChar(20)
+  bankName           String?
+  bankBranch         String?
+  bankAccount        String?
+  balance            Decimal         @default(0) @db.Decimal(15, 2)
+  isActive           Boolean         @default(true)
+  acceptsDirectSales Boolean         @default(false)
 
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  transactions      FinancialTransaction[]
-  reconciliations   BankReconciliation[]
-  paymentMethods    PaymentMethod[]
-  orderPayments     OrderPayment[]
-  cashRegisters     CashRegister[]
+  transactions    FinancialTransaction[]
+  reconciliations BankReconciliation[]
+  paymentMethods  PaymentMethod[]
+  orderPayments   OrderPayment[]
+  cashRegisters   CashRegister[]
 
   // FN-16: conta sem movimento pode ser excluída; com movimento, só inativada.
-  deletedAt         DateTime?
+  deletedAt DateTime?
 
   @@index([tenantId])
   @@index([tenantId, deletedAt])
@@ -1105,49 +1161,49 @@ model FinancialAccount {
 
 /// Contas a receber
 model AccountsReceivable {
-  id          String          @id @default(cuid())
-  tenantId    String
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  orderId          String?
-  order            Order?          @relation(fields: [orderId], references: [id])
-  customerId       String?
-  customer         Customer?       @relation(fields: [customerId], references: [id])
-  orderPaymentId   String?
-  orderPayment     OrderPayment?   @relation(fields: [orderPaymentId], references: [id])
+  orderId        String?
+  order          Order?        @relation(fields: [orderId], references: [id])
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  orderPaymentId String?
+  orderPayment   OrderPayment? @relation(fields: [orderPaymentId], references: [id])
 
-  description String
-  installment Int             @default(1) // parcela atual
-  totalInstallments Int       @default(1)
-  amount      Decimal         @db.Decimal(15, 2)
-  paidAmount  Decimal         @default(0) @db.Decimal(15, 2)
-  status      FinancialStatus @default(PENDING)
+  description       String
+  installment       Int             @default(1) // parcela atual
+  totalInstallments Int             @default(1)
+  amount            Decimal         @db.Decimal(15, 2)
+  paidAmount        Decimal         @default(0) @db.Decimal(15, 2)
+  status            FinancialStatus @default(PENDING)
 
-  dueDate     DateTime
-  paidAt      DateTime?
+  dueDate DateTime
+  paidAt  DateTime?
 
   // Juros e multa
-  interestRate Decimal?       @db.Decimal(5, 2)  // % ao mês
-  fineRate     Decimal?       @db.Decimal(5, 2)  // %
-  interestAmount Decimal      @default(0) @db.Decimal(15, 2)
-  fineAmount   Decimal        @default(0) @db.Decimal(15, 2)
+  interestRate   Decimal? @db.Decimal(5, 2) // % ao mês
+  fineRate       Decimal? @db.Decimal(5, 2) // %
+  interestAmount Decimal  @default(0) @db.Decimal(15, 2)
+  fineAmount     Decimal  @default(0) @db.Decimal(15, 2)
 
   paymentMethodId String?
   paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
 
-  costCenterId String?
-  costCenter   CostCenter?    @relation(fields: [costCenterId], references: [id])
+  costCenterId   String?
+  costCenter     CostCenter?      @relation(fields: [costCenterId], references: [id])
   chartAccountId String?
   chartAccount   ChartOfAccounts? @relation(fields: [chartAccountId], references: [id])
 
-  notes       String?
-  metadata    Json?
+  notes    String?
+  metadata Json?
 
   // FN-04: soft delete de título sem baixa e sem origem em pedido.
-  deletedAt   DateTime?
+  deletedAt DateTime?
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
@@ -1158,46 +1214,46 @@ model AccountsReceivable {
 
 /// Contas a pagar
 model AccountsPayable {
-  id          String          @id @default(cuid())
-  tenantId    String
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   purchaseOrderId String?
   purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  supplierId  String?
-  supplier    Supplier?       @relation(fields: [supplierId], references: [id])
+  supplierId      String?
+  supplier        Supplier?      @relation(fields: [supplierId], references: [id])
 
-  description String
-  installment Int             @default(1)
-  totalInstallments Int       @default(1)
-  amount      Decimal         @db.Decimal(15, 2)
-  paidAmount  Decimal         @default(0) @db.Decimal(15, 2)
-  status      FinancialStatus @default(PENDING)
+  description       String
+  installment       Int             @default(1)
+  totalInstallments Int             @default(1)
+  amount            Decimal         @db.Decimal(15, 2)
+  paidAmount        Decimal         @default(0) @db.Decimal(15, 2)
+  status            FinancialStatus @default(PENDING)
 
-  dueDate     DateTime
-  paidAt      DateTime?
-  scheduledDate DateTime?     // agendamento de pagamento
+  dueDate       DateTime
+  paidAt        DateTime?
+  scheduledDate DateTime? // agendamento de pagamento
 
-  approvalLevel Int           @default(0) // nível de aprovação necessário
+  approvalLevel Int       @default(0) // nível de aprovação necessário
   approvedBy    String?
   approvedAt    DateTime?
 
   paymentMethodId String?
   paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
 
-  costCenterId String?
-  costCenter   CostCenter?    @relation(fields: [costCenterId], references: [id])
+  costCenterId   String?
+  costCenter     CostCenter?      @relation(fields: [costCenterId], references: [id])
   chartAccountId String?
   chartAccount   ChartOfAccounts? @relation(fields: [chartAccountId], references: [id])
 
-  notes       String?
-  metadata    Json?
+  notes    String?
+  metadata Json?
 
   // FN-04: soft delete de título sem baixa e sem origem em pedido.
-  deletedAt   DateTime?
+  deletedAt DateTime?
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
@@ -1208,30 +1264,30 @@ model AccountsPayable {
 
 /// Movimentações financeiras (lançamentos)
 model FinancialTransaction {
-  id          String          @id @default(cuid())
-  tenantId    String
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  accountId   String
-  account     FinancialAccount @relation(fields: [accountId], references: [id])
+  accountId String
+  account   FinancialAccount @relation(fields: [accountId], references: [id])
 
-  type        TransactionType
-  amount      Decimal         @db.Decimal(15, 2)
-  balanceAfter Decimal        @db.Decimal(15, 2)
+  type         TransactionType
+  amount       Decimal         @db.Decimal(15, 2)
+  balanceAfter Decimal         @db.Decimal(15, 2)
 
-  description String
-  referenceType String?       // order, purchase, receivable, payable
+  description   String
+  referenceType String? // order, purchase, receivable, payable
   referenceId   String?
 
-  costCenterId String?
-  costCenter   CostCenter?    @relation(fields: [costCenterId], references: [id])
+  costCenterId   String?
+  costCenter     CostCenter?      @relation(fields: [costCenterId], references: [id])
   chartAccountId String?
   chartAccount   ChartOfAccounts? @relation(fields: [chartAccountId], references: [id])
 
   reconciledAt DateTime?
-  metadata    Json?
+  metadata     Json?
 
-  createdAt   DateTime        @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, accountId])
   @@index([tenantId, createdAt])
@@ -1241,13 +1297,13 @@ model FinancialTransaction {
 
 /// Métodos de pagamento
 model PaymentMethod {
-  id        String            @id @default(cuid())
-  tenantId  String
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name      String            // Dinheiro, PIX, Cartão Crédito, Boleto, etc.
-  type      PaymentMethodType @default(OTHER)
-  isActive  Boolean           @default(true)
+  name     String // Dinheiro, PIX, Cartão Crédito, Boleto, etc.
+  type     PaymentMethodType @default(OTHER)
+  isActive Boolean           @default(true)
 
   defaultAccountId      String?
   defaultAccount        FinancialAccount? @relation(fields: [defaultAccountId], references: [id])
@@ -1270,9 +1326,9 @@ model PaymentMethod {
 
 /// Condições de pagamento
 model PaymentCondition {
-  id                      String               @id @default(cuid())
-  tenantId                String
-  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   name                    String               @db.VarChar(100)
   code                    String               @db.VarChar(20)
@@ -1282,14 +1338,14 @@ model PaymentCondition {
   entryPercentage         Decimal              @default(0) @db.Decimal(5, 2)
   isActive                Boolean              @default(true)
 
-  createdAt               DateTime             @default(now())
-  updatedAt               DateTime             @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  orderPayments           OrderPayment[]
+  orderPayments  OrderPayment[]
   // Sem vínculo nenhum, a condição aparece pra qualquer método que mostre
   // condição (comportamento anterior à SCRUM-52) — o vínculo só passa a
   // restringir quando o tenant explicitamente escolhe os métodos.
-  paymentMethods          PaymentMethod[]
+  paymentMethods PaymentMethod[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -1298,27 +1354,27 @@ model PaymentCondition {
 
 /// Pagamentos do pedido (suporta split payment)
 model OrderPayment {
-  id                  String            @id @default(cuid())
-  tenantId            String
-  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  orderId             String
-  order               Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  paymentMethodId     String
-  paymentMethod       PaymentMethod     @relation(fields: [paymentMethodId], references: [id])
-  paymentConditionId  String?
-  paymentCondition    PaymentCondition? @relation(fields: [paymentConditionId], references: [id])
-  financialAccountId  String?
-  financialAccount    FinancialAccount? @relation(fields: [financialAccountId], references: [id])
+  orderId            String
+  order              Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentMethodId    String
+  paymentMethod      PaymentMethod     @relation(fields: [paymentMethodId], references: [id])
+  paymentConditionId String?
+  paymentCondition   PaymentCondition? @relation(fields: [paymentConditionId], references: [id])
+  financialAccountId String?
+  financialAccount   FinancialAccount? @relation(fields: [financialAccountId], references: [id])
 
-  amount              Decimal           @db.Decimal(15, 2)
-  installments        Int               @default(1)
-  authorizationCode   String?           @db.VarChar(50)
-  notes               String?           @db.VarChar(500)
+  amount            Decimal @db.Decimal(15, 2)
+  installments      Int     @default(1)
+  authorizationCode String? @db.VarChar(50)
+  notes             String? @db.VarChar(500)
 
-  createdAt           DateTime          @default(now())
+  createdAt DateTime @default(now())
 
-  receivables         AccountsReceivable[]
+  receivables AccountsReceivable[]
 
   @@index([orderId])
   @@index([tenantId])
@@ -1327,19 +1383,19 @@ model OrderPayment {
 
 /// Caixa registradora / ponto de caixa
 model CashRegister {
-  id                  String            @id @default(cuid())
-  tenantId            String
-  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name                String            @db.VarChar(100)
-  financialAccountId  String
-  financialAccount    FinancialAccount  @relation(fields: [financialAccountId], references: [id])
-  isActive            Boolean           @default(true)
+  name               String           @db.VarChar(100)
+  financialAccountId String
+  financialAccount   FinancialAccount @relation(fields: [financialAccountId], references: [id])
+  isActive           Boolean          @default(true)
 
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  sessions            CashRegisterSession[]
+  sessions CashRegisterSession[]
 
   @@unique([tenantId, name])
   @@map("cash_registers")
@@ -1347,28 +1403,28 @@ model CashRegister {
 
 /// Sessão de caixa (abertura/fechamento)
 model CashRegisterSession {
-  id              String            @id @default(cuid())
-  tenantId        String
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  cashRegisterId  String
-  cashRegister    CashRegister      @relation(fields: [cashRegisterId], references: [id])
-  operatorId      String
-  operator        User              @relation("SessionOperator", fields: [operatorId], references: [id])
-  closedById      String?
-  closedBy        User?             @relation("SessionCloser", fields: [closedById], references: [id])
-  status          CashSessionStatus @default(OPEN)
+  cashRegisterId String
+  cashRegister   CashRegister      @relation(fields: [cashRegisterId], references: [id])
+  operatorId     String
+  operator       User              @relation("SessionOperator", fields: [operatorId], references: [id])
+  closedById     String?
+  closedBy       User?             @relation("SessionCloser", fields: [closedById], references: [id])
+  status         CashSessionStatus @default(OPEN)
 
-  openedAt        DateTime          @default(now())
+  openedAt        DateTime  @default(now())
   closedAt        DateTime?
-  openingBalance  Decimal           @db.Decimal(15, 2)
-  closingBalance  Decimal?          @db.Decimal(15, 2)
-  expectedBalance Decimal?          @db.Decimal(15, 2)
-  difference      Decimal?          @db.Decimal(15, 2)
-  notes           String?           @db.VarChar(500)
+  openingBalance  Decimal   @db.Decimal(15, 2)
+  closingBalance  Decimal?  @db.Decimal(15, 2)
+  expectedBalance Decimal?  @db.Decimal(15, 2)
+  difference      Decimal?  @db.Decimal(15, 2)
+  notes           String?   @db.VarChar(500)
 
-  movements       CashRegisterMovement[]
-  orders          Order[]
+  movements CashRegisterMovement[]
+  orders    Order[]
 
   @@index([tenantId])
   @@index([cashRegisterId])
@@ -1377,19 +1433,19 @@ model CashRegisterSession {
 
 /// Movimentações de caixa (suprimento/sangria)
 model CashRegisterMovement {
-  id              String              @id @default(cuid())
-  tenantId        String
-  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  sessionId       String
-  session         CashRegisterSession @relation(fields: [sessionId], references: [id])
-  type            CashMovementType
-  amount          Decimal             @db.Decimal(15, 2)
-  reason          String              @db.VarChar(255)
-  performedById   String
-  performedBy     User                @relation("MovementPerformedBy", fields: [performedById], references: [id])
+  sessionId     String
+  session       CashRegisterSession @relation(fields: [sessionId], references: [id])
+  type          CashMovementType
+  amount        Decimal             @db.Decimal(15, 2)
+  reason        String              @db.VarChar(255)
+  performedById String
+  performedBy   User                @relation("MovementPerformedBy", fields: [performedById], references: [id])
 
-  createdAt       DateTime            @default(now())
+  createdAt DateTime @default(now())
 
   @@index([sessionId])
   @@map("cash_register_movements")
@@ -1397,25 +1453,25 @@ model CashRegisterMovement {
 
 /// Conciliação bancária
 model BankReconciliation {
-  id          String               @id @default(cuid())
-  tenantId    String
+  id       String @id @default(cuid())
+  tenantId String
 
-  accountId   String
-  account     FinancialAccount     @relation(fields: [accountId], references: [id])
+  accountId String
+  account   FinancialAccount @relation(fields: [accountId], references: [id])
 
-  externalId  String?              // ID no extrato
+  externalId  String? // ID no extrato
   date        DateTime
   description String
-  amount      Decimal              @db.Decimal(15, 2)
+  amount      Decimal         @db.Decimal(15, 2)
   type        TransactionType
 
-  status      ReconciliationStatus @default(PENDING)
+  status               ReconciliationStatus @default(PENDING)
   matchedTransactionId String?
 
-  rawData     Json?                // dados brutos do OFX
+  rawData Json? // dados brutos do OFX
 
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, accountId])
   @@index([tenantId, status])
@@ -1424,13 +1480,13 @@ model BankReconciliation {
 
 /// Centros de custo
 model CostCenter {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name      String
-  code      String
-  isActive  Boolean  @default(true)
+  name     String
+  code     String
+  isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1446,20 +1502,20 @@ model CostCenter {
 
 /// Plano de contas (DRE hierárquico)
 model ChartOfAccounts {
-  id        String      @id @default(cuid())
-  tenantId  String
-  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  code      String      // 1.1.01
-  name      String
-  type      AccountType
-  parentId  String?
-  parent    ChartOfAccounts?  @relation("ChartTree", fields: [parentId], references: [id])
-  children  ChartOfAccounts[] @relation("ChartTree")
-  isActive  Boolean     @default(true)
+  code     String // 1.1.01
+  name     String
+  type     AccountType
+  parentId String?
+  parent   ChartOfAccounts?  @relation("ChartTree", fields: [parentId], references: [id])
+  children ChartOfAccounts[] @relation("ChartTree")
+  isActive Boolean           @default(true)
 
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   receivables  AccountsReceivable[]
   payables     AccountsPayable[]
@@ -1476,55 +1532,55 @@ model ChartOfAccounts {
 
 /// Notas fiscais (NF-e, NFC-e, NFS-e)
 model Invoice {
-  id          String        @id @default(cuid())
-  tenantId    String
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  type        InvoiceType
-  status      InvoiceStatus @default(DRAFT)
+  type   InvoiceType
+  status InvoiceStatus @default(DRAFT)
 
-  orderId     String?
-  order       Order?        @relation(fields: [orderId], references: [id])
-  customerId  String?
-  customer    Customer?     @relation(fields: [customerId], references: [id])
+  orderId    String?
+  order      Order?    @relation(fields: [orderId], references: [id])
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
 
   // Dados da NF
-  number      String?       // número da nota
-  series      String?
-  accessKey   String?       // chave de acesso (44 dígitos)
-  protocol    String?       // protocolo de autorização
+  number    String? // número da nota
+  series    String?
+  accessKey String? // chave de acesso (44 dígitos)
+  protocol  String? // protocolo de autorização
 
   // Valores
-  totalProducts Decimal     @default(0) @db.Decimal(15, 2)
-  totalDiscount Decimal     @default(0) @db.Decimal(15, 2)
-  shippingCost  Decimal     @default(0) @db.Decimal(15, 2)
-  totalTax      Decimal     @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal     @default(0) @db.Decimal(15, 2)
+  totalProducts Decimal @default(0) @db.Decimal(15, 2)
+  totalDiscount Decimal @default(0) @db.Decimal(15, 2)
+  shippingCost  Decimal @default(0) @db.Decimal(15, 2)
+  totalTax      Decimal @default(0) @db.Decimal(15, 2)
+  totalAmount   Decimal @default(0) @db.Decimal(15, 2)
 
   // Impostos totais
-  icmsTotal   Decimal       @default(0) @db.Decimal(15, 2)
-  ipiTotal    Decimal       @default(0) @db.Decimal(15, 2)
-  pisTotal    Decimal       @default(0) @db.Decimal(15, 2)
-  cofinsTotal Decimal       @default(0) @db.Decimal(15, 2)
+  icmsTotal   Decimal @default(0) @db.Decimal(15, 2)
+  ipiTotal    Decimal @default(0) @db.Decimal(15, 2)
+  pisTotal    Decimal @default(0) @db.Decimal(15, 2)
+  cofinsTotal Decimal @default(0) @db.Decimal(15, 2)
 
   // XML e PDF
-  xmlUrl      String?
-  pdfUrl      String?
+  xmlUrl String?
+  pdfUrl String?
 
   // CFOP principal
-  cfop        String?
+  cfop String?
 
-  notes       String?
-  metadata    Json?
+  notes    String?
+  metadata Json?
 
   authorizedAt DateTime?
   cancelledAt  DateTime?
   cancelReason String?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  items       InvoiceItem[]
+  items InvoiceItem[]
 
   @@index([tenantId, status])
   @@index([tenantId, accessKey])
@@ -1534,34 +1590,34 @@ model Invoice {
 
 /// Itens da nota fiscal
 model InvoiceItem {
-  id          String   @id @default(cuid())
-  invoiceId   String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   productName String
   ncm         String?
   cfop        String?
-  cst         String?  // CST ou CSOSN
+  cst         String? // CST ou CSOSN
 
-  quantity    Int
-  unitPrice   Decimal  @db.Decimal(15, 4)
-  totalPrice  Decimal  @db.Decimal(15, 2)
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(15, 4)
+  totalPrice Decimal @db.Decimal(15, 2)
 
   // Impostos por item
-  icmsBase    Decimal  @default(0) @db.Decimal(15, 2)
-  icmsRate    Decimal  @default(0) @db.Decimal(5, 2)
-  icmsAmount  Decimal  @default(0) @db.Decimal(15, 2)
+  icmsBase   Decimal @default(0) @db.Decimal(15, 2)
+  icmsRate   Decimal @default(0) @db.Decimal(5, 2)
+  icmsAmount Decimal @default(0) @db.Decimal(15, 2)
 
-  ipiBase     Decimal  @default(0) @db.Decimal(15, 2)
-  ipiRate     Decimal  @default(0) @db.Decimal(5, 2)
-  ipiAmount   Decimal  @default(0) @db.Decimal(15, 2)
+  ipiBase   Decimal @default(0) @db.Decimal(15, 2)
+  ipiRate   Decimal @default(0) @db.Decimal(5, 2)
+  ipiAmount Decimal @default(0) @db.Decimal(15, 2)
 
-  pisBase     Decimal  @default(0) @db.Decimal(15, 2)
-  pisRate     Decimal  @default(0) @db.Decimal(5, 2)
-  pisAmount   Decimal  @default(0) @db.Decimal(15, 2)
+  pisBase   Decimal @default(0) @db.Decimal(15, 2)
+  pisRate   Decimal @default(0) @db.Decimal(5, 2)
+  pisAmount Decimal @default(0) @db.Decimal(15, 2)
 
-  cofinsBase  Decimal  @default(0) @db.Decimal(15, 2)
-  cofinsRate  Decimal  @default(0) @db.Decimal(5, 2)
+  cofinsBase   Decimal @default(0) @db.Decimal(15, 2)
+  cofinsRate   Decimal @default(0) @db.Decimal(5, 2)
   cofinsAmount Decimal @default(0) @db.Decimal(15, 2)
 
   @@index([invoiceId])
@@ -1570,27 +1626,27 @@ model InvoiceItem {
 
 /// Regras fiscais por NCM/UF
 model TaxRule {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   name      String
-  ncm       String?  // NCM aplicável (pode ser wildcard)
-  stateFrom String?  // UF origem
-  stateTo   String?  // UF destino
+  ncm       String? // NCM aplicável (pode ser wildcard)
+  stateFrom String? // UF origem
+  stateTo   String? // UF destino
   taxRegime TaxRegime?
 
-  cfop      String?
-  cst       String?
+  cfop String?
+  cst  String?
 
-  icmsRate  Decimal? @db.Decimal(5, 2)
+  icmsRate   Decimal? @db.Decimal(5, 2)
   icmsStRate Decimal? @db.Decimal(5, 2)
-  ipiRate   Decimal? @db.Decimal(5, 2)
-  pisRate   Decimal? @db.Decimal(5, 2)
+  ipiRate    Decimal? @db.Decimal(5, 2)
+  pisRate    Decimal? @db.Decimal(5, 2)
   cofinsRate Decimal? @db.Decimal(5, 2)
 
-  isActive  Boolean  @default(true)
-  priority  Int      @default(0) // para resolver conflitos
+  isActive Boolean @default(true)
+  priority Int     @default(0) // para resolver conflitos
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1602,16 +1658,16 @@ model TaxRule {
 
 /// CFOPs cadastrados
 model Cfop {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  code        String
-  description String
+  code          String
+  description   String
   operationType String // entrada, saida, transferencia
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([tenantId, code])
   @@map("cfops")
@@ -1623,28 +1679,28 @@ model Cfop {
 
 /// Clientes
 model Customer {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name        String
-  email       String?
-  phone       String?
-  document    String?  // CPF ou CNPJ
+  name         String
+  email        String?
+  phone        String?
+  document     String? // CPF ou CNPJ
   documentType String? // CPF ou CNPJ
-  tradeName   String?  // nome fantasia (PJ)
+  tradeName    String? // nome fantasia (PJ)
 
   // Scoring e segmentação
-  score       Int      @default(0)
-  tags        String[] @default([])
-  segment     String?
+  score   Int      @default(0)
+  tags    String[] @default([])
+  segment String?
 
-  notes       String?
-  metadata    Json?
+  notes    String?
+  metadata Json?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  deletedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   addresses    CustomerAddress[]
   orders       Order[]
@@ -1662,40 +1718,40 @@ model Customer {
 
 /// Endereços do cliente
 model CustomerAddress {
-  id          String   @id @default(cuid())
-  customerId  String
-  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
-  label       String?  // Casa, Trabalho, etc.
-  street      String
-  number      String
-  complement  String?
+  label        String? // Casa, Trabalho, etc.
+  street       String
+  number       String
+  complement   String?
   neighborhood String
-  city        String
-  state       String
-  zipCode     String
-  country     String   @default("BR")
-  isDefault   Boolean  @default(false)
+  city         String
+  state        String
+  zipCode      String
+  country      String  @default("BR")
+  isDefault    Boolean @default(false)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("customer_addresses")
 }
 
 /// Interações com cliente (histórico)
 model CustomerInteraction {
-  id          String          @id @default(cuid())
-  customerId  String
-  customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
-  type        InteractionType
-  subject     String?
-  content     String
-  userId      String?
-  user        User?           @relation(fields: [userId], references: [id])
+  type    InteractionType
+  subject String?
+  content String
+  userId  String?
+  user    User?           @relation(fields: [userId], references: [id])
 
-  createdAt   DateTime        @default(now())
+  createdAt DateTime @default(now())
 
   @@index([customerId])
   @@map("customer_interactions")
@@ -1703,26 +1759,26 @@ model CustomerInteraction {
 
 /// Leads (pré-clientes)
 model Lead {
-  id          String     @id @default(cuid())
-  tenantId    String
-  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name        String
-  email       String?
-  phone       String?
-  company     String?
-  source      String?    // website, indicação, marketplace
-  status      LeadStatus @default(NEW)
-  score       Int        @default(0)
+  name    String
+  email   String?
+  phone   String?
+  company String?
+  source  String? // website, indicação, marketplace
+  status  LeadStatus @default(NEW)
+  score   Int        @default(0)
 
-  assignedTo  String?    // userId
-  notes       String?
+  assignedTo String? // userId
+  notes      String?
 
   convertedAt DateTime?
-  customerId  String?    // se convertido
+  customerId  String? // se convertido
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, status])
   @@map("leads")
@@ -1734,31 +1790,31 @@ model Lead {
 
 /// Conexões com marketplaces
 model MarketplaceConnection {
-  id          String          @id @default(cuid())
-  tenantId    String
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   marketplace MarketplaceType
-  accountName String          // nome da conta no marketplace
-  sellerId    String?         // ID do vendedor no marketplace
+  accountName String // nome da conta no marketplace
+  sellerId    String? // ID do vendedor no marketplace
 
   // Tokens (criptografados)
-  accessToken  String?
-  refreshToken String?
+  accessToken    String?
+  refreshToken   String?
   tokenExpiresAt DateTime?
 
-  isActive    Boolean         @default(true)
-  lastSyncAt  DateTime?
-  syncStatus  SyncStatus      @default(PENDING)
+  isActive   Boolean    @default(true)
+  lastSyncAt DateTime?
+  syncStatus SyncStatus @default(PENDING)
 
-  settings    Json            @default("{}") // configurações específicas
-  metadata    Json?
+  settings Json  @default("{}") // configurações específicas
+  metadata Json?
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  listings    MarketplaceListing[]
-  syncLogs    MarketplaceSyncLog[]
+  listings      MarketplaceListing[]
+  syncLogs      MarketplaceSyncLog[]
   webhookEvents WebhookEvent[]
 
   @@index([tenantId, marketplace])
@@ -1767,26 +1823,26 @@ model MarketplaceConnection {
 
 /// Anúncios vinculados no marketplace
 model MarketplaceListing {
-  id            String          @id @default(cuid())
-  connectionId  String
-  connection    MarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id           String                @id @default(cuid())
+  connectionId String
+  connection   MarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
-  productId     String
-  product       Product         @relation(fields: [productId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
 
-  externalId    String          // ID do anúncio no marketplace
-  externalUrl   String?
-  title         String?
-  status        ListingStatus   @default(ACTIVE)
+  externalId  String // ID do anúncio no marketplace
+  externalUrl String?
+  title       String?
+  status      ListingStatus @default(ACTIVE)
 
-  price         Decimal?        @db.Decimal(15, 2)
-  stock         Int?
-  lastSyncAt    DateTime?
+  price      Decimal?  @db.Decimal(15, 2)
+  stock      Int?
+  lastSyncAt DateTime?
 
-  metadata      Json?           // dados extras do marketplace
+  metadata Json? // dados extras do marketplace
 
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([connectionId, externalId])
   @@index([productId])
@@ -1795,19 +1851,19 @@ model MarketplaceListing {
 
 /// Logs de sincronização
 model MarketplaceSyncLog {
-  id            String          @id @default(cuid())
-  connectionId  String
-  connection    MarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id           String                @id @default(cuid())
+  connectionId String
+  connection   MarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
-  syncType      String          // orders, stock, prices, listings
-  status        SyncStatus
-  itemsProcessed Int            @default(0)
-  itemsFailed    Int            @default(0)
-  errors        Json?           // detalhes dos erros
-  duration      Int?            // em ms
+  syncType       String // orders, stock, prices, listings
+  status         SyncStatus
+  itemsProcessed Int        @default(0)
+  itemsFailed    Int        @default(0)
+  errors         Json? // detalhes dos erros
+  duration       Int? // em ms
 
-  startedAt     DateTime
-  completedAt   DateTime?
+  startedAt   DateTime
+  completedAt DateTime?
 
   @@index([connectionId, syncType])
   @@index([connectionId, startedAt])
@@ -1816,20 +1872,20 @@ model MarketplaceSyncLog {
 
 /// Eventos de webhook recebidos
 model WebhookEvent {
-  id            String          @id @default(cuid())
-  connectionId  String?
-  connection    MarketplaceConnection? @relation(fields: [connectionId], references: [id])
+  id           String                 @id @default(cuid())
+  connectionId String?
+  connection   MarketplaceConnection? @relation(fields: [connectionId], references: [id])
 
-  marketplace   MarketplaceType
-  eventType     String          // orders, items, questions, messages
-  externalId    String          // ID do recurso
-  payload       Json            // payload completo
-  processed     Boolean         @default(false)
-  processedAt   DateTime?
-  error         String?
-  retryCount    Int             @default(0)
+  marketplace MarketplaceType
+  eventType   String // orders, items, questions, messages
+  externalId  String // ID do recurso
+  payload     Json // payload completo
+  processed   Boolean         @default(false)
+  processedAt DateTime?
+  error       String?
+  retryCount  Int             @default(0)
 
-  createdAt     DateTime        @default(now())
+  createdAt DateTime @default(now())
 
   @@index([marketplace, processed])
   @@index([connectionId, eventType])
@@ -1842,23 +1898,23 @@ model WebhookEvent {
 
 /// Notificações do sistema
 model Notification {
-  id          String              @id @default(cuid())
-  tenantId    String
-  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  userId      String?
-  user        User?               @relation(fields: [userId], references: [id])
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
 
-  type        NotificationType    @default(IN_APP)
-  priority    NotificationPriority @default(MEDIUM)
-  title       String
-  message     String
-  data        Json?               // dados extras (link, entityType, entityId)
+  type     NotificationType     @default(IN_APP)
+  priority NotificationPriority @default(MEDIUM)
+  title    String
+  message  String
+  data     Json? // dados extras (link, entityType, entityId)
 
-  readAt      DateTime?
-  sentAt      DateTime?
+  readAt DateTime?
+  sentAt DateTime?
 
-  createdAt   DateTime            @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, userId, readAt])
   @@index([tenantId, createdAt])
@@ -1867,10 +1923,10 @@ model Notification {
 
 /// Preferências de notificação por usuário
 model NotificationPreference {
-  id        String           @id @default(cuid())
-  userId    String
-  event     String           // order_created, stock_low, etc.
-  channels  NotificationType[] // quais canais quer receber
+  id       String             @id @default(cuid())
+  userId   String
+  event    String // order_created, stock_low, etc.
+  channels NotificationType[] // quais canais quer receber
 
   @@unique([userId, event])
   @@map("notification_preferences")
@@ -1878,24 +1934,24 @@ model NotificationPreference {
 
 /// Importações em massa via CSV (produtos, clientes, despesas) — SCRUM-19
 model ImportJob {
-  id          String       @id @default(cuid())
-  tenantId    String
+  id       String @id @default(cuid())
+  tenantId String
 
-  type        ImportType
-  status      ImportStatus @default(PENDING)
+  type   ImportType
+  status ImportStatus @default(PENDING)
 
-  fileName    String
-  fileKey     String       // chave no MinIO
+  fileName String
+  fileKey  String // chave no MinIO
 
-  totalRows   Int          @default(0)
-  successRows Int          @default(0)
-  errorRows   Int          @default(0)
-  errors      Json?        // [{ line: number, message: string }]
+  totalRows   Int   @default(0)
+  successRows Int   @default(0)
+  errorRows   Int   @default(0)
+  errors      Json? // [{ line: number, message: string }]
 
-  createdBy   String?
+  createdBy String?
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, type])
   @@index([tenantId, status])

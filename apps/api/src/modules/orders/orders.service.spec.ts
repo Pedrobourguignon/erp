@@ -338,6 +338,35 @@ describe('OrdersService', () => {
       );
     });
 
+    it.each([
+      ['COMPLETED', true],
+      ['DELIVERED', true],
+      ['PENDING', false],
+      ['SHIPPED', false],
+      ['CANCELLED', false],
+      ['RETURNED', false],
+    ])('diz à tela se o pedido %s aceita troca/devolução (%p)', async (status, expected) => {
+      prisma.order.findFirst.mockResolvedValue(makeOrder({ status }));
+
+      const result = await service.findOne(TENANT_ID, 'order-uuid-001');
+
+      expect(result.canAdjustItems).toBe(expected);
+    });
+
+    it('traz o histórico de trocas e devoluções', async () => {
+      prisma.order.findFirst.mockResolvedValue(makeOrder());
+
+      await service.findOne(TENANT_ID, 'order-uuid-001');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            adjustments: expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+          }),
+        }),
+      );
+    });
+
     it('should throw NotFoundException when order not found', async () => {
       prisma.order.findFirst.mockResolvedValue(null);
 

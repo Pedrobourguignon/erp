@@ -87,6 +87,7 @@ export type PaginationInput = z.infer<typeof paginationSchema>;
 // ─── Order money math ──────────────────────────────────────────────────
 
 export * from './order-money';
+export * from './order-adjustment';
 export * from './br-documents';
 export * from './br-fiscal';
 export * from './password';

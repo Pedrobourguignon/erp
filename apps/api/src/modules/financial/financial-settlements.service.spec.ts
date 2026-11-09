@@ -361,4 +361,51 @@ describe('FinancialSettlementsService', () => {
       expect(cashRegisters.mirrorSettlementInDrawer).not.toHaveBeenCalled();
     });
   });
+  describe('settleWithin (baixa dentro da transação de quem chama)', () => {
+    it('lê e grava pelo tx recebido, sem abrir outra transação', async () => {
+      const tx = {
+        ...createMockTx(),
+        accountsPayable: {
+          findFirst: jest.fn().mockResolvedValue(makePayable()),
+          update: jest.fn().mockResolvedValue({}),
+        },
+        financialAccount: {
+          findFirst: jest.fn().mockResolvedValue({ id: 'acc-drawer' }),
+          update: jest.fn().mockResolvedValue({ balance: 400 }),
+        },
+      };
+      const prisma = createMockPrisma(createMockTx());
+      const cashRegisters = { mirrorSettlementInDrawer: jest.fn().mockResolvedValue(null) };
+      const module = await Test.createTestingModule({
+        providers: [
+          FinancialSettlementsService,
+          { provide: PrismaService, useValue: prisma },
+          { provide: CashRegistersService, useValue: cashRegisters },
+        ],
+      }).compile();
+      const service = module.get(FinancialSettlementsService);
+
+      const result = await service.settleWithin(
+        tx as never,
+        TENANT_A,
+        PAYABLE_ID,
+        { kind: 'PAYABLE', accountId: 'acc-drawer' },
+        'user-1',
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.accountsPayable.findFirst).not.toHaveBeenCalled();
+      expect(tx.accountsPayable.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: PAYABLE_ID, tenantId: TENANT_A } }),
+      );
+      expect(tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-drawer' }, data: { balance: { decrement: 100 } } }),
+      );
+      expect(cashRegisters.mirrorSettlementInDrawer).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({ accountId: 'acc-drawer', direction: 'out', amount: 100 }),
+      );
+      expect(result.status).toBe('PAID');
+    });
+  });
 });

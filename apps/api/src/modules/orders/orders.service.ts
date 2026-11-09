@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, OrderStatus } from '@prisma/client';
-import { getAllowedTransitions } from '@erp/constants';
+import { canAdjustOrderItems, getAllowedTransitions } from '@erp/constants';
 import { toDateRange } from '../../common/utils/date-range.util';
 import {
   calculateItemTotal,
@@ -159,6 +159,26 @@ export class OrdersService {
         statusHistory: {
           orderBy: { createdAt: 'desc' },
         },
+        adjustments: {
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            type: true,
+            quantity: true,
+            returnedName: true,
+            returnedSku: true,
+            returnedValue: true,
+            newName: true,
+            newSku: true,
+            newValue: true,
+            difference: true,
+            abatedAmount: true,
+            receivableId: true,
+            payableId: true,
+            reason: true,
+            createdAt: true,
+          },
+        },
       },
     });
 
@@ -189,6 +209,7 @@ export class OrdersService {
     return {
       ...order,
       allowedTransitions: this.allowedTransitionsFor(order),
+      canAdjustItems: canAdjustOrderItems(order.status as never),
       statusHistory: order.statusHistory.map((entry) => ({
         ...entry,
         changedByName: entry.changedBy

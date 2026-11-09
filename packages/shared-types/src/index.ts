@@ -78,6 +78,20 @@ export interface Product {
   maxStock?: number;
   createdAt?: string;
   updatedAt?: string;
+  /** Só no detalhe (`GET /products/:id`). */
+  variants?: ProductVariant[];
+}
+
+/** Variante (tamanho/cor) como o detalhe do produto devolve. */
+export interface ProductVariant {
+  id: string;
+  sku: string;
+  /** Ex.: "Azul - M". */
+  name: string;
+  /** Ausente = vende pelo preço do produto. */
+  salePrice: number | string | null;
+  isActive?: boolean;
+  inventoryItems?: { id: string; warehouseId: string; quantity: number; reserved: number; available: number }[];
 }
 
 /**
@@ -115,6 +129,11 @@ export interface Order {
   /** Statuses this order may transition to, computed by the API. */
   allowedTransitions?: OrderStatus[];
 
+  /** Detalhe: o pedido aceita troca/devolução de itens (entregue ou concluído). */
+  canAdjustItems?: boolean;
+  /** Detalhe: trocas e devoluções já feitas, da mais recente para a mais antiga. */
+  adjustments?: OrderAdjustment[];
+
   /**
    * Nome do cliente, plano.
    *
@@ -124,6 +143,54 @@ export interface Order {
    * ninguém percebe que o contrato quebrou.
    */
   customerName?: string | null;
+}
+
+export type OrderAdjustmentType = 'EXCHANGE' | 'RETURN';
+
+/** Troca ou devolução de um item, como `GET /orders/:id` devolve em `adjustments`. */
+export interface OrderAdjustment {
+  id: string;
+  type: OrderAdjustmentType;
+  quantity: number;
+  returnedName: string;
+  returnedSku: string;
+  /** O que o cliente tinha pago pelas unidades devolvidas. */
+  returnedValue: number;
+  newName: string | null;
+  newSku: string | null;
+  newValue: number;
+  /** > 0: cliente pagou. < 0: a loja devolveu. */
+  difference: number;
+  /** Parte da devolução abatida do que o cliente ainda devia no pedido. */
+  abatedAmount: number;
+  receivableId: string | null;
+  payableId: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+/** Resposta de `POST /orders/:id/exchange` e `POST /orders/:id/return-item`. */
+export interface OrderItemAdjustmentResult {
+  adjustmentId: string;
+  type: OrderAdjustmentType;
+  orderId: string;
+  orderItemId: string;
+  newOrderItemId: string | null;
+  quantity: number;
+  returnedValue: number;
+  newValue: number;
+  difference: number;
+  differenceKind: 'RECEIVABLE' | 'PAYABLE' | 'NONE';
+  abatedAmount: number;
+  refundAmount: number;
+  receivableId: string | null;
+  payableId: string | null;
+  /** A diferença foi recebida/devolvida no ato (senão o título ficou em aberto). */
+  settled: boolean;
+  subtotal: number;
+  discount: number;
+  totalAmount: number;
+  status: OrderStatus;
 }
 
 /** One entry of `order.statusHistory` (not `order.history`). */

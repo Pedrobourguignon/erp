@@ -1,20 +1,20 @@
 "use client";
 
-import { ArrowRightLeft, Package } from "lucide-react";
+import { Package } from "lucide-react";
 import React, { useState } from "react";
 
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TruncatedText } from "@/components/ui/truncated-text";
-import type { OrderItem } from "@/hooks/use-orders";
+import type { OrderDetail, OrderItem } from "@/hooks/use-orders";
+import type { AdjustMode } from "@/lib/order-adjustment";
 import { formatCurrency } from "@/lib/utils";
 
-import { ExchangeDialog } from "./exchange-dialog";
+import { AdjustItemDialog } from "./adjust-item-dialog";
+import { AdjustmentsList } from "./adjustments-list";
+import { ItemAdjustActions } from "./item-adjust-actions";
 
 interface ItemsTabProps {
-  items: OrderItem[];
-  orderId: string;
-  canExchange: boolean;
+  order: OrderDetail;
   /** Order-level values, so the footer matches what the API charged. */
   discount: number;
   shippingCost: number;
@@ -22,14 +22,14 @@ interface ItemsTabProps {
 }
 
 export function ItemsTab({
-  items,
-  orderId,
-  canExchange,
+  order,
   discount,
   shippingCost,
   totalAmount,
 }: ItemsTabProps) {
-  const [exchangeItem, setExchangeItem] = useState<OrderItem | null>(null);
+  const items = order.items ?? [];
+  const canAdjust = !!order.canAdjustItems;
+  const [target, setTarget] = useState<{ item: OrderItem; mode: AdjustMode } | null>(null);
   const subtotal = items.reduce(
     (sum, item) => sum + Number(item.totalPrice ?? 0),
     0
@@ -110,14 +110,12 @@ export function ItemsTab({
                     {formatCurrency(Number(item.totalPrice))}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {canExchange ? <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setExchangeItem(item)}
-                      >
-                        <ArrowRightLeft className="mr-1 h-3.5 w-3.5" />
-                        Trocar
-                      </Button> : null}
+                    {canAdjust ? (
+                      <ItemAdjustActions
+                        hasVariant={!!item.variantId}
+                        onPick={(mode) => setTarget({ item, mode })}
+                      />
+                    ) : null}
                   </td>
                 </tr>
               ))}
@@ -168,11 +166,18 @@ export function ItemsTab({
         </div>
       </CardContent>
 
-      <ExchangeDialog
-        open={!!exchangeItem}
-        onOpenChange={(open) => !open && setExchangeItem(null)}
-        orderId={orderId}
-        item={exchangeItem}
+      {order.adjustments?.length ? (
+        <CardContent className="border-t pt-6">
+          <AdjustmentsList adjustments={order.adjustments} />
+        </CardContent>
+      ) : null}
+
+      <AdjustItemDialog
+        open={!!target}
+        onOpenChange={(open) => !open && setTarget(null)}
+        order={order}
+        item={target?.item ?? null}
+        initialMode={target?.mode ?? "return"}
       />
     </Card>
   );

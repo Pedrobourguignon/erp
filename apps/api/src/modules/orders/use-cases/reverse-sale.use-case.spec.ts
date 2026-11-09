@@ -67,6 +67,7 @@ function createMockPrisma() {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     accountsPayable: {
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockResolvedValue({ id: 'ap-001' }),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
@@ -277,6 +278,47 @@ describe('ReverseSaleUseCase', () => {
       }),
     );
     expect(result.refundedAmount).toBe(199.8);
+  });
+
+  describe('depois de uma devolução parcial', () => {
+    it('desconta o que já foi reembolsado, para não devolver duas vezes', async () => {
+      prisma.accountsReceivable.findMany.mockResolvedValue([
+        { id: 'ar-1', paidAmount: 200, amount: 200, status: 'PAID' },
+      ]);
+      // A devolução de um item já pagou R$ 90 de volta ao cliente.
+      prisma.accountsPayable.findMany.mockResolvedValue([{ id: 'ap-dev', paidAmount: 90 }]);
+
+      const result = await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, reason);
+
+      expect(prisma.accountsPayable.findMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: TENANT_ID,
+          status: { in: ['PAID', 'PARTIALLY_PAID'] },
+          AND: [
+            { metadata: { path: ['kind'], equals: 'ORDER_ADJUSTMENT' } },
+            { metadata: { path: ['orderId'], equals: ORDER_ID } },
+          ],
+        },
+        select: { id: true, paidAmount: true },
+      });
+      expect(result.refundedAmount).toBe(110);
+    });
+
+    it('cancela o reembolso de devolução ainda em aberto: o estorno já cobre o valor', async () => {
+      await useCase.execute(TENANT_ID, ORDER_ID, USER_ID, reason);
+
+      expect(prisma.accountsPayable.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: TENANT_ID,
+          status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          AND: [
+            { metadata: { path: ['kind'], equals: 'ORDER_ADJUSTMENT' } },
+            { metadata: { path: ['orderId'], equals: ORDER_ID } },
+          ],
+        },
+        data: { status: 'CANCELLED' },
+      });
+    });
   });
 
   it('should not raise a payable when nothing had been paid', async () => {

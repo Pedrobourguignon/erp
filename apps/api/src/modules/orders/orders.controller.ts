@@ -20,7 +20,8 @@ import {
 } from './dto/order.dto';
 import { ExchangeOrderItemDto } from './dto/exchange-order-item.dto';
 import { ReverseSaleDto } from './dto/reverse-sale.dto';
-import { ExchangeOrderItemUseCase } from './use-cases/exchange-order-item.use-case';
+import { ReturnOrderItemDto } from './dto/return-order-item.dto';
+import { AdjustOrderItemUseCase } from './use-cases/adjust-order-item.use-case';
 import { ReverseSaleUseCase } from './use-cases/reverse-sale.use-case';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -37,7 +38,7 @@ import {
 export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
-    private readonly exchangeOrderItem: ExchangeOrderItemUseCase,
+    private readonly adjustOrderItem: AdjustOrderItemUseCase,
     private readonly reverseSale: ReverseSaleUseCase,
   ) {}
 
@@ -104,14 +105,40 @@ export class OrdersController {
   @Post(':id/exchange')
   @RequirePermissions('orders:update')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Exchange an order item for another product/variant' })
+  @ApiOperation({
+    summary:
+      'Exchange units of a delivered/completed order item for another product or another size/colour of the same product',
+  })
   async exchange(
     @CurrentTenant() tenantId: string,
     @CurrentUser() userId: string,
     @Param('id') id: string,
     @Body() dto: ExchangeOrderItemDto,
   ) {
-    const result = await this.exchangeOrderItem.execute(tenantId, id, userId, dto);
+    const result = await this.adjustOrderItem.execute(tenantId, id, userId, {
+      orderItemId: dto.orderItemId,
+      quantity: dto.quantity,
+      replacement: { productId: dto.newProductId, variantId: dto.newVariantId },
+      reason: dto.reason,
+      settlement: dto.settlement,
+    });
+    return { success: true, data: result };
+  }
+
+  @Post(':id/return-item')
+  @RequirePermissions('orders:update')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Return units of a delivered/completed order item without replacement: stock comes back, the refund is recalculated',
+  })
+  async returnItem(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() userId: string,
+    @Param('id') id: string,
+    @Body() dto: ReturnOrderItemDto,
+  ) {
+    const result = await this.adjustOrderItem.execute(tenantId, id, userId, dto);
     return { success: true, data: result };
   }
 

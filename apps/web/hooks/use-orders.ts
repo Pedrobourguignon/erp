@@ -49,11 +49,15 @@ export interface OrderDetail extends OrderListItem {
   statusHistory: OrderStatusHistoryEntry[];
   seller?: { id: string; name: string };
   salesChannel?: { id: string; name: string; type: string };
+  /** Caixa em que a venda foi registrada — onde o dinheiro de uma troca volta, se ainda aberto. */
+  cashRegisterSessionId?: string | null;
 }
 
 export interface OrderItem {
   id: string;
   productId: string;
+  /** Tamanho/cor vendido — a troca de tamanho oferece as outras variantes. */
+  variantId?: string | null;
   productName: string;
   sku: string;
   quantity: number;
@@ -327,42 +331,6 @@ export function useCreateOrder() {
       return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
-    },
-  });
-}
-
-// ─── Exchange order item (SCRUM-21) ─────────────────────────────────────
-
-export interface ExchangeOrderItemPayload {
-  id: string; // order id
-  orderItemId: string;
-  newProductId: string;
-  newVariantId?: string;
-  quantity?: number;
-  notes?: string;
-}
-
-export interface ExchangeResult {
-  orderId: string;
-  difference: number;
-  differenceKind: "RECEIVABLE" | "PAYABLE" | "NONE";
-  totalAmount: number;
-}
-
-export function useExchangeOrderItem() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ id, ...payload }: ExchangeOrderItemPayload) => {
-      const { data } = await api.post<ApiResponse<ExchangeResult>>(
-        `/orders/${id}/exchange`,
-        payload
-      );
-      return data;
-    },
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: orderKeys.detail(variables.id) });
       queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
     },
   });

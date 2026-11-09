@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
-import { ExchangeOrderItemUseCase } from './use-cases/exchange-order-item.use-case';
+import { AdjustOrderItemUseCase } from './use-cases/adjust-order-item.use-case';
 import { ReverseSaleUseCase } from './use-cases/reverse-sale.use-case';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -44,16 +44,18 @@ describe('OrdersController', () => {
   let controller: OrdersController;
   let ordersService: ReturnType<typeof createMockOrdersService>;
   let reverseSale: { execute: jest.Mock };
+  let adjustOrderItem: { execute: jest.Mock };
 
   beforeEach(async () => {
     ordersService = createMockOrdersService();
     reverseSale = { execute: jest.fn().mockResolvedValue({ orderId: 'order-uuid-001' }) };
+    adjustOrderItem = { execute: jest.fn().mockResolvedValue({ adjustmentId: 'adj-1' }) };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrdersController],
       providers: [
         { provide: OrdersService, useValue: ordersService },
-        { provide: ExchangeOrderItemUseCase, useValue: { execute: jest.fn() } },
+        { provide: AdjustOrderItemUseCase, useValue: adjustOrderItem },
         { provide: ReverseSaleUseCase, useValue: reverseSale },
         { provide: PrismaService, useValue: {} },
         Reflector,
@@ -213,6 +215,46 @@ describe('OrdersController', () => {
     it('should require orders:read permission', () => {
       const metadata = Reflect.getMetadata(PERMISSIONS_KEY, controller.getTimeline);
       expect(metadata).toEqual(['orders:read']);
+    });
+  });
+  // ─── troca / devolução de item ────────────────────────────────────────
+  describe('POST /orders/:id/exchange', () => {
+    it('traduz o DTO no comando de troca, com o produto novo como replacement', async () => {
+      const settlement = { paymentMethodId: 'pm-cash' };
+      await controller.exchange(TENANT_ID, USER_ID, 'order-uuid-001', {
+        orderItemId: 'item-001',
+        newProductId: 'prod-002',
+        newVariantId: 'var-g',
+        quantity: 1,
+        reason: 'Ficou pequena',
+        settlement,
+      });
+
+      expect(adjustOrderItem.execute).toHaveBeenCalledWith(TENANT_ID, 'order-uuid-001', USER_ID, {
+        orderItemId: 'item-001',
+        quantity: 1,
+        replacement: { productId: 'prod-002', variantId: 'var-g' },
+        reason: 'Ficou pequena',
+        settlement,
+      });
+    });
+
+    it('should require orders:update permission', () => {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, controller.exchange)).toEqual(['orders:update']);
+    });
+  });
+
+  describe('POST /orders/:id/return-item', () => {
+    it('devolve sem replacement', async () => {
+      const dto = { orderItemId: 'item-001', quantity: 1, reason: 'Defeito' };
+      const result = await controller.returnItem(TENANT_ID, USER_ID, 'order-uuid-001', dto);
+
+      expect(adjustOrderItem.execute).toHaveBeenCalledWith(TENANT_ID, 'order-uuid-001', USER_ID, dto);
+      expect(result).toEqual({ success: true, data: { adjustmentId: 'adj-1' } });
+    });
+
+    it('should require orders:update permission', () => {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, controller.returnItem)).toEqual(['orders:update']);
     });
   });
 });

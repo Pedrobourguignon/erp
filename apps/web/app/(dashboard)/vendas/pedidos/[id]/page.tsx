@@ -1,7 +1,5 @@
 "use client";
 
-import { TERMINAL_ORDER_STATUSES } from "@erp/constants";
-import type { OrderStatus } from "@erp/shared-types";
 import {
   ArrowLeft,
   Clock,
@@ -39,14 +37,6 @@ const tabs = [
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
-
-/**
- * VD-03: a closed order accepts no item change. The list of closed statuses
- * lives in `@erp/constants`, shared with `order-status.rules.ts` on the API.
- */
-function isOrderMutable(status: OrderStatus): boolean {
-  return !TERMINAL_ORDER_STATUSES.includes(status);
-}
 
 export default function OrderDetailPage() {
   const params = useParams();
@@ -167,9 +157,7 @@ export default function OrderDetailPage() {
 
       {activeTab === "itens" && (
         <ItemsTab
-          items={order.items ?? []}
-          orderId={orderId}
-          canExchange={isOrderMutable(order.status)}
+          order={order}
           discount={orderDiscount}
           shippingCost={shippingCost}
           totalAmount={Number(order.totalAmount)}

@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { canTransition } from '@erp/constants';
-import { roundMoney } from '@erp/validators';
 import { PrismaService } from '../../../database/prisma/prisma.service';
+import { subtractMoney, sumMoney } from '../../../common/utils/money.util';
 import { ReverseSaleDto } from '../dto/reverse-sale.dto';
 import { translateOrderStatus } from '../order-status.rules';
 
@@ -74,13 +74,26 @@ export class ReverseSaleUseCase {
       );
     }
 
-    // Everything the customer actually paid comes back as an obligation to them.
+    // Everything the customer actually paid comes back as an obligation to them
+    // — minus what a partial return or a cheaper exchange already gave back.
     const settled = await this.prisma.accountsReceivable.findMany({
       where: { orderId, tenantId, status: { in: ['PAID', 'PARTIALLY_PAID'] } },
       select: { id: true, paidAmount: true },
     });
-    const refundedAmount = roundMoney(
-      settled.reduce((sum, r) => sum + Number(r.paidAmount ?? 0), 0),
+    const alreadyRefunded = await this.prisma.accountsPayable.findMany({
+      where: {
+        tenantId,
+        status: { in: ['PAID', 'PARTIALLY_PAID'] },
+        AND: adjustmentOf(orderId),
+      },
+      select: { id: true, paidAmount: true },
+    });
+    const refundedAmount = Math.max(
+      subtractMoney(
+        sumMoney(settled.map((r) => r.paidAmount)),
+        sumMoney(alreadyRefunded.map((p) => p.paidAmount)),
+      ),
+      0,
     );
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -115,6 +128,17 @@ export class ReverseSaleUseCase {
             { metadata: { path: ['kind'], equals: 'PAYMENT_FEE' } },
             { metadata: { path: ['orderId'], equals: orderId } },
           ],
+        },
+        data: { status: 'CANCELLED' },
+      });
+
+      // A refund of a partial return still open is superseded: the payable
+      // below already includes it.
+      await tx.accountsPayable.updateMany({
+        where: {
+          tenantId,
+          status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          AND: adjustmentOf(orderId),
         },
         data: { status: 'CANCELLED' },
       });
@@ -266,4 +290,12 @@ export class ReverseSaleUseCase {
       },
     });
   }
+}
+
+/** Títulos lançados por uma troca/devolução de item deste pedido. */
+function adjustmentOf(orderId: string) {
+  return [
+    { metadata: { path: ['kind'], equals: 'ORDER_ADJUSTMENT' } },
+    { metadata: { path: ['orderId'], equals: orderId } },
+  ];
 }

@@ -45,6 +45,16 @@ export const TERMINAL_ORDER_STATUSES: OrderStatus[] = [
   'RETURNED',
 ];
 
+/**
+ * Statuses in which items can be exchanged or returned: the goods are already
+ * with the customer. Shared by the API guard and the order detail screen.
+ */
+export const ADJUSTABLE_ORDER_STATUSES: OrderStatus[] = ['DELIVERED', 'COMPLETED'];
+
+export function canAdjustOrderItems(status: OrderStatus): boolean {
+  return ADJUSTABLE_ORDER_STATUSES.includes(status);
+}
+
 export function getAllowedTransitions(status: OrderStatus): OrderStatus[] {
   return ORDER_STATUS_TRANSITIONS[status] ?? [];
 }
