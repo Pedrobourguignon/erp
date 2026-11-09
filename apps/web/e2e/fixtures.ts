@@ -255,7 +255,12 @@ export async function ensureSellableProduct(
 ): Promise<SellableProduct> {
   const listed = await client.get("/products?limit=50&status=ACTIVE");
   const products = (listed.body as { data?: Record<string, unknown>[] }).data ?? [];
-  const existing = products.find((p) => availableOf(p) >= minimumStock);
+  // Produto com variante não se vende sem dizer qual variante: o pedido sem
+  // `variantId` não acha estoque e a reserva nunca acontece. As jornadas de
+  // troca criam produtos assim, então eles aparecem nesta lista.
+  const hasVariants = (p: Record<string, unknown>) =>
+    Number((p._count as { variants?: number } | undefined)?.variants ?? 0) > 0;
+  const existing = products.find((p) => !hasVariants(p) && availableOf(p) >= minimumStock);
   if (existing) {
     return {
       id: existing.id as string,
@@ -338,8 +343,13 @@ export async function ensureOpenCashSession(
     return { sessionId: sessions[0].id, cashRegisterId: sessions[0].cashRegisterId };
   }
 
-  const registers = await client.get("/cash-registers?limit=10");
-  const list = (registers.body as { data?: { id: string; name: string }[] }).data ?? [];
+  // O caixa principal é o ativo mais antigo. A API lista do mais novo para o
+  // mais antigo, então "o primeiro da lista" virava qualquer caixa criado por
+  // outra jornada (o segundo caixa da troca) assim que um existisse.
+  const registers = await client.get("/cash-registers?limit=50&isActive=true");
+  const list = ((registers.body as { data?: { id: string; name: string; createdAt: string }[] }).data ?? [])
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   expect(list.length, "nenhum caixa cadastrado").toBeGreaterThan(0);
 
   const opened = await client.post(`/cash-registers/${list[0].id}/open`, {

@@ -219,11 +219,15 @@ test.describe("cancelamento e estorno", () => {
 
     await apiClient.patch(`/orders/${order.id}/cancel`, { reason: "Para o teste de troca" });
 
-    const exchange = await apiClient.post(`/orders/${order.id}/items/${order.items[0].id}/exchange`, {
+    // A rota antiga deste teste (`/items/:id/exchange`) não existia: o 404
+    // satisfazia `>= 400` e o teste passava sem exercitar regra nenhuma.
+    const exchange = await apiClient.post(`/orders/${order.id}/exchange`, {
+      orderItemId: order.items[0].id,
       newProductId: product.id,
       quantity: 1,
       reason: "Troca em pedido cancelado",
     });
-    expect(exchange.status).toBeGreaterThanOrEqual(400);
+    expect(exchange.status).toBe(400);
+    expect(JSON.stringify(exchange.body)).toMatch(/cancelado/);
   });
 });
