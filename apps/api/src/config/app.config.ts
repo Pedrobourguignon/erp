@@ -1,3 +1,5 @@
+import { corsOrigins, redisConnection } from './runtime-config';
+
 export const appConfig = () => ({
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -6,10 +8,7 @@ export const appConfig = () => ({
     url: process.env.DATABASE_URL,
   },
 
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-  },
+  redis: redisConnection(),
 
   jwt: {
     secret: process.env.JWT_SECRET || 'change-me-in-production',
@@ -29,7 +28,7 @@ export const appConfig = () => ({
   },
 
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: corsOrigins(),
   },
 
   // Mercado Livre

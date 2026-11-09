@@ -30,6 +30,7 @@ import { JobsModule } from './jobs/jobs.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { appConfig } from './config/app.config';
+import { redisConnection } from './config/runtime-config';
 
 @Module({
   imports: [
@@ -63,10 +64,7 @@ import { appConfig } from './config/app.config';
 
     // BullMQ
     BullModule.forRoot({
-      connection: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-      },
+      connection: redisConnection(),
       defaultJobOptions: {
         removeOnComplete: 1000,
         removeOnFail: 5000,

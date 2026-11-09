@@ -58,6 +58,7 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      target: dev
     container_name: erp-api
     restart: unless-stopped
     ports:

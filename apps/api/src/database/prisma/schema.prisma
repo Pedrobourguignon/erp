@@ -1099,6 +1099,7 @@ model FinancialAccount {
   deletedAt         DateTime?
 
   @@index([tenantId])
+  @@index([tenantId, deletedAt])
   @@map("financial_accounts")
 }
 
@@ -1151,6 +1152,7 @@ model AccountsReceivable {
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
   @@index([tenantId, customerId])
+  @@index([tenantId, deletedAt])
   @@map("accounts_receivable")
 }
 
@@ -1200,6 +1202,7 @@ model AccountsPayable {
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
   @@index([tenantId, supplierId])
+  @@index([tenantId, deletedAt])
   @@map("accounts_payable")
 }
 
