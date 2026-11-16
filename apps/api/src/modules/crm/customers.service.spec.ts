@@ -62,6 +62,9 @@ function createMockPrisma() {
       findMany: jest.fn(),
       count: jest.fn(),
     },
+    order: {
+      aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: { totalAmount: null } }),
+    },
     $transaction: jest.fn((cb: (tx: typeof mockTx) => Promise<unknown>) => cb(mockTx)),
     _tx: mockTx,
   };
@@ -360,6 +363,18 @@ describe('CustomersService', () => {
         notIn: ['CANCELLED', 'RETURNED', 'DRAFT'],
       });
     });
+
+    // O valor já ignorava cancelado, devolvido e rascunho, mas a quantidade
+    // (`_count.orders`) contava tudo: um cliente com 1 venda e 1 cancelada
+    // aparecia com "2 pedidos" e o gasto de um só.
+    it('counts the same orders it sums', async () => {
+      await service.findAll(TENANT_A, { page: 1, limit: 20 });
+
+      const args = prisma.customer.findMany.mock.calls[0][0];
+      expect(args.select._count.select.orders.where.status).toEqual({
+        notIn: ['CANCELLED', 'RETURNED', 'DRAFT'],
+      });
+    });
   });
 
   describe('findAll', () => {
@@ -444,15 +459,75 @@ describe('CustomersService', () => {
 
   describe('findById', () => {
     it('should return customer with addresses and interactions', async () => {
-      const customer = makeCustomer({ addresses: [], interactions: [], _count: { orders: 5, invoices: 2 } });
+      const customer = makeCustomer({ addresses: [], interactions: [], _count: { invoices: 2 } });
       prisma.customer.findFirst.mockResolvedValue(customer);
 
       const result = await service.findById(TENANT_A, 'cust-001');
 
-      expect(result).toEqual(customer);
+      expect(result).toMatchObject({ id: 'cust-001', addresses: [], interactions: [] });
       const findArgs = prisma.customer.findFirst.mock.calls[0][0];
       expect(findArgs.where.tenantId).toBe(TENANT_A);
       expect(findArgs.where.deletedAt).toBeNull();
+    });
+
+    // Os cards "Total de Pedidos" e "Total Gasto" da ficha liam `totalOrders` e
+    // `totalSpent`, que o detalhe nunca devolveu — a listagem foi corrigida
+    // (AE-13) e a ficha ficou com `?? 0`: todo cliente "nunca comprou".
+    describe('order totals', () => {
+      beforeEach(() => {
+        prisma.customer.findFirst.mockResolvedValue(
+          makeCustomer({ addresses: [], interactions: [], _count: { invoices: 0 } }),
+        );
+      });
+
+      it('returns totalOrders and totalSpent, the fields the cards read', async () => {
+        prisma.order.aggregate.mockResolvedValue({
+          _count: { _all: 3 },
+          _sum: { totalAmount: 708.9 },
+        });
+
+        const result = await service.findById(TENANT_A, 'cust-001');
+
+        expect(result).toMatchObject({ totalOrders: 3, totalSpent: 708.9 });
+      });
+
+      it('counts and sums only orders that became a sale, in this tenant and for this customer', async () => {
+        await service.findById(TENANT_A, 'cust-001');
+
+        expect(prisma.order.aggregate).toHaveBeenCalledWith({
+          where: {
+            tenantId: TENANT_A,
+            customerId: 'cust-001',
+            deletedAt: null,
+            status: { notIn: ['CANCELLED', 'RETURNED', 'DRAFT'] },
+          },
+          _count: { _all: true },
+          _sum: { totalAmount: true },
+        });
+      });
+
+      it('is zero for a customer that never ordered', async () => {
+        prisma.order.aggregate.mockResolvedValue({ _count: { _all: 0 }, _sum: { totalAmount: null } });
+
+        const result = await service.findById(TENANT_A, 'cust-001');
+
+        expect(result).toMatchObject({ totalOrders: 0, totalSpent: 0 });
+      });
+
+      it('does not keep counting every order under _count', async () => {
+        const result = await service.findById(TENANT_A, 'cust-001');
+
+        const findArgs = prisma.customer.findFirst.mock.calls[0][0];
+        expect(findArgs.include._count.select.orders).toBeUndefined();
+        expect((result as { _count: Record<string, number> })._count).not.toHaveProperty('orders');
+      });
+
+      it('does not total anything for a customer that does not exist', async () => {
+        prisma.customer.findFirst.mockResolvedValue(null);
+
+        await expect(service.findById(TENANT_A, 'nope')).rejects.toThrow(NotFoundException);
+        expect(prisma.order.aggregate).not.toHaveBeenCalled();
+      });
     });
 
     it('should throw NotFoundException when customer not found', async () => {

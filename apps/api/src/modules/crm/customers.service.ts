@@ -20,7 +20,7 @@ import {
   buildPrismaOrderBy,
 } from '../../common/utils/pagination';
 import { formatDocument, onlyDigits } from '@erp/validators';
-import { sumMoney } from '../../common/utils/money.util';
+import { sumMoney, toMoney } from '../../common/utils/money.util';
 import { startOfDayInTz, toLocalDateKey } from '../../common/utils/date-range.util';
 
 /**
@@ -121,15 +121,17 @@ export class CustomersService {
           score: true,
           createdAt: true,
           updatedAt: true,
+          // A quantidade conta as mesmas vendas que o valor soma — antes contava
+          // também cancelado, devolvido e rascunho.
           _count: {
-            select: { orders: true },
+            select: { orders: { where: BILLABLE_ORDERS } },
           },
           // AE-13: a tabela lê `totalOrders` e `totalSpent`; a API devolvia só
           // `_count.orders`, então as duas colunas ficavam vazias — e um
           // cliente com três pedidos aparecia como se nunca tivesse comprado.
           // Um `select` aninhado evita o N+1 de somar pedido a pedido.
           orders: {
-            where: { status: { notIn: NON_BILLABLE_ORDER_STATUSES } },
+            where: BILLABLE_ORDERS,
             select: { totalAmount: true },
           },
         },
@@ -162,7 +164,7 @@ export class CustomersService {
           },
         },
         _count: {
-          select: { orders: true, invoices: true },
+          select: { invoices: true },
         },
       },
     });
@@ -173,7 +175,20 @@ export class CustomersService {
       );
     }
 
-    return customer;
+    // Os cards da ficha (Total de Pedidos / Total Gasto) leem estes dois campos
+    // — o mesmo contrato da listagem (AE-13). A soma é do banco, num agregado
+    // único, em vez de trazer os pedidos do cliente para somar aqui.
+    const totals = await this.prisma.order.aggregate({
+      where: { tenantId, customerId: id, ...BILLABLE_ORDERS },
+      _count: { _all: true },
+      _sum: { totalAmount: true },
+    });
+
+    return {
+      ...customer,
+      totalOrders: totals._count._all,
+      totalSpent: toMoney(totals._sum.totalAmount ?? 0),
+    };
   }
 
   /**
@@ -497,6 +512,16 @@ const NON_BILLABLE_ORDER_STATUSES: OrderStatus[] = [
   'RETURNED',
   'DRAFT',
 ];
+
+/**
+ * Os pedidos que contam como venda do cliente: nem cancelado, nem devolvido,
+ * nem rascunho, nem excluído. Quantidade e valor usam o mesmo filtro — senão
+ * os dois números do mesmo cliente discordam entre si.
+ */
+const BILLABLE_ORDERS = {
+  deletedAt: null,
+  status: { notIn: NON_BILLABLE_ORDER_STATUSES },
+};
 
 /**
  * Troca a relação crua por `totalOrders` e `totalSpent` — os campos que a tela
