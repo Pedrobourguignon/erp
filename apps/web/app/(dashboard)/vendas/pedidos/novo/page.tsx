@@ -23,6 +23,7 @@ import React, { useState, useCallback } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { z } from "zod";
 
+import { NewCustomerButton } from "@/components/forms/customer-quick-create-dialog";
 import { MoneyInput } from "@/components/forms/money-input";
 import { PaymentSelector } from "@/components/forms/payment-selector";
 import {
@@ -31,7 +32,6 @@ import {
   type SelectOption,
 } from "@/components/forms/searchable-select";
 import { Button } from "@/components/ui/button";
-import { NewCustomerButton } from "@/components/forms/customer-quick-create-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
