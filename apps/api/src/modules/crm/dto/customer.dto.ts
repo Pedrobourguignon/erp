@@ -12,8 +12,10 @@ import {
   IsObject,
   IsBoolean,
   Length,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsBrDocument } from '../../../common/validators/is-br-document.validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 
 export class CreateCustomerDto {
@@ -23,10 +25,10 @@ export class CreateCustomerDto {
   @MaxLength(255)
   name: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
-  @IsEmail()
-  email?: string;
+  @IsEmail({}, { message: 'E-mail inválido' })
+  email?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -34,16 +36,31 @@ export class CreateCustomerDto {
   @MaxLength(15)
   phone?: string;
 
-  @ApiPropertyOptional({ description: 'CPF or CNPJ' })
+  @ApiPropertyOptional({ description: 'CPF or CNPJ', nullable: true })
   @IsOptional()
   @IsString()
   @MaxLength(18)
-  document?: string;
+  // Opcional, mas válido quando informado: o dígito verificador, não a contagem.
+  @IsBrDocument('documentType', {
+    message: 'Documento inválido: confira o CPF ou o CNPJ informado',
+  })
+  document?: string | null;
 
-  @ApiPropertyOptional({ enum: ['CPF', 'CNPJ'] })
+  @ApiPropertyOptional({ enum: ['CPF', 'CNPJ'], nullable: true })
   @IsOptional()
   @IsIn(['CPF', 'CNPJ'])
-  documentType?: string;
+  documentType?: string | null;
+
+  @ApiPropertyOptional({
+    example: '1990-05-20',
+    nullable: true,
+    description: 'Data de nascimento (YYYY-MM-DD). null remove.',
+  })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'Informe a data de nascimento no formato AAAA-MM-DD',
+  })
+  birthDate?: string | null;
 
   @ApiPropertyOptional({ description: 'Trade name (PJ)' })
   @IsOptional()

@@ -7,11 +7,11 @@ const TENANT = 'tenant-a';
 function createPrisma() {
   return {
     product: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
-    customer: { create: jest.fn().mockResolvedValue({}) },
+    customer: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
     accountsPayable: { create: jest.fn().mockResolvedValue({}) },
   } as unknown as PrismaService & {
     product: { findFirst: jest.Mock; create: jest.Mock };
-    customer: { create: jest.Mock };
+    customer: { findFirst: jest.Mock; create: jest.Mock };
     accountsPayable: { create: jest.Mock };
   };
 }
@@ -57,19 +57,85 @@ describe('ROW_IMPORTERS', () => {
   });
 
   describe('CUSTOMERS', () => {
+    const created = () => prisma.customer.create.mock.calls[0][0].data;
+
     it('should create a customer and infer CNPJ documentType', async () => {
       await ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, {
         name: 'Empresa X',
-        document: '12.345.678/0001-99',
+        document: '11.222.333/0001-81',
       });
-      const data = prisma.customer.create.mock.calls[0][0].data;
-      expect(data).toMatchObject({ name: 'Empresa X', documentType: 'CNPJ' });
+      expect(created()).toMatchObject({ name: 'Empresa X', documentType: 'CNPJ' });
     });
 
     it('should require a name', async () => {
       await expect(
         ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: '' }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    // AE-15: o documento é guardado só com dígitos; com a máscara, mudar a
+    // formatação burlava a checagem de duplicidade.
+    it.each([
+      ['a masked CPF', '529.982.247-25', '52998224725', 'CPF'],
+      ['a bare CPF', '52998224725', '52998224725', 'CPF'],
+      ['a masked CNPJ', '11.222.333/0001-81', '11222333000181', 'CNPJ'],
+    ])('stores %s with digits only', async (_label, document, digits, documentType) => {
+      await ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Ana', document });
+
+      expect(created()).toMatchObject({ document: digits, documentType });
+    });
+
+    // AE-04: o dígito verificador, não a contagem.
+    it.each([
+      ['111.111.111-11', 'CPF inválido'],
+      ['11.111.111/1111-11', 'CNPJ inválido'],
+      ['123', 'Documento inválido'],
+    ])('refuses the invalid document %s, in Portuguese', async (document, message) => {
+      await expect(
+        ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Ana', document }),
+      ).rejects.toThrow(new BadRequestException(message));
+      expect(prisma.customer.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a document that already belongs to another customer of the tenant', async () => {
+      prisma.customer.findFirst.mockResolvedValueOnce({ id: 'c-1' });
+
+      await expect(
+        ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Ana', document: '529.982.247-25' }),
+      ).rejects.toThrow('Já existe um cliente com o documento "529.982.247-25"');
+
+      // com a máscara que for: a busca é pelos dígitos, dentro da empresa
+      expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+        where: { tenantId: TENANT, document: '52998224725', deletedAt: null },
+        select: { id: true },
+      });
+      expect(prisma.customer.create).not.toHaveBeenCalled();
+    });
+
+    it('imports a customer with no document and no e-mail, with no duplicate lookup', async () => {
+      await ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Cliente de balcão', phone: '11911112222' });
+
+      expect(created()).toMatchObject({ name: 'Cliente de balcão', document: null, documentType: null, email: null });
+      expect(prisma.customer.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('refuses an invalid e-mail', async () => {
+      await expect(
+        ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Ana', email: 'sem-arroba' }),
+      ).rejects.toThrow(new BadRequestException('E-mail inválido'));
+      expect(prisma.customer.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an e-mail that already belongs to another customer of the tenant', async () => {
+      prisma.customer.findFirst.mockResolvedValueOnce({ id: 'c-1' });
+
+      await expect(
+        ROW_IMPORTERS.CUSTOMERS(prisma, TENANT, { name: 'Ana', email: 'ana@exemplo.com' }),
+      ).rejects.toThrow('Já existe um cliente com o e-mail "ana@exemplo.com"');
+      expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+        where: { tenantId: TENANT, email: 'ana@exemplo.com', deletedAt: null },
+        select: { id: true },
+      });
     });
   });
 

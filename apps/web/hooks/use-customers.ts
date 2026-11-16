@@ -27,9 +27,11 @@ export interface CustomerAddress {
 }
 
 export interface CustomerDetail extends Customer {
-  documentType: CustomerDocumentType;
+  documentType: CustomerDocumentType | null;
   /** Opcional no cadastro: a API devolve `null` quando não foi informado. */
   phone: string | null;
+  /** Data civil (meia-noite do lojista), opcional. */
+  birthDate: string | null;
   segment: CustomerSegment;
   totalOrders: number;
   totalSpent: number;
@@ -39,7 +41,7 @@ export interface CustomerDetail extends Customer {
 }
 
 export interface CustomerListItem extends Customer {
-  documentType: CustomerDocumentType;
+  documentType: CustomerDocumentType | null;
   /** Opcional no cadastro: a API devolve `null` quando não foi informado. */
   phone: string | null;
   segment: CustomerSegment;
@@ -60,11 +62,16 @@ export interface CustomerListParams {
 }
 
 export interface CustomerFormData {
-  documentType: CustomerDocumentType;
+  /** `null` quando não há documento. */
+  documentType: CustomerDocumentType | null;
   name: string;
-  document: string;
-  email: string;
+  /** Opcional: `null` apaga (na edição) ou deixa em branco (no cadastro). */
+  document: string | null;
+  /** Opcional: `null` apaga (na edição) ou deixa em branco (no cadastro). */
+  email: string | null;
   phone: string;
+  /** `YYYY-MM-DD`, opcional; `null` apaga. */
+  birthDate: string | null;
   segment?: CustomerSegment;
 }
 

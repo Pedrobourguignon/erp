@@ -32,6 +32,7 @@ function makeMethod(overrides: Partial<PaymentMethod> = {}): PaymentMethod {
     defaultAccountId: 'acc-1',
     feePercentage: 0,
     settlementDays: 0,
+    autoSettle: false,
     requiresAuthorization: false,
     fiscalCode: null,
     isActive: true,

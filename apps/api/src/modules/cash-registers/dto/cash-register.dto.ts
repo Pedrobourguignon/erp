@@ -7,6 +7,7 @@ import {
   IsIn,
   Min,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -22,6 +23,14 @@ export class CreateCashRegisterDto {
   @IsString()
   @IsNotEmpty()
   financialAccountId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Cofre do caixa: destino padrão da sangria e origem padrão do suprimento.',
+  })
+  @IsOptional()
+  @IsString()
+  vaultAccountId?: string;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
@@ -41,6 +50,13 @@ export class UpdateCashRegisterDto {
   @IsString()
   financialAccountId?: string;
 
+  /** `null` remove o cofre: cada sangria e suprimento passa a exigir a conta. */
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  vaultAccountId?: string | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
@@ -52,6 +68,17 @@ export class OpenSessionDto {
   @IsNumber()
   @Min(0)
   openingBalance: number;
+
+  /**
+   * De onde vem o que o fundo declarado tem a mais que a conta da gaveta. Sem
+   * ela, vale o cofre do caixa. Não é pedida quando nada precisa entrar.
+   */
+  @ApiPropertyOptional({
+    description: 'Conta de onde sai o fundo de troco que falta. Sem ela, vale o cofre do caixa.',
+  })
+  @IsOptional()
+  @IsString()
+  sourceAccountId?: string;
 }
 
 export class CloseSessionDto {
@@ -100,6 +127,33 @@ export class CashMovementDto {
   @IsNotEmpty()
   @MaxLength(255)
   reason: string;
+}
+
+/**
+ * Sangria é transferência: o dinheiro sai da gaveta e entra em
+ * `destinationAccountId` (ou na conta padrão do caixa). Pagar uma despesa com
+ * dinheiro da gaveta não é sangria — é título + baixa pela conta do caixa.
+ */
+export class WithdrawDto extends CashMovementDto {
+  @ApiPropertyOptional({
+    description: 'Conta que recebe o dinheiro. Sem ela, vale o cofre do caixa.',
+  })
+  @IsOptional()
+  @IsString()
+  destinationAccountId?: string;
+}
+
+/**
+ * Suprimento é transferência: o dinheiro sai de `sourceAccountId` (ou do cofre
+ * do caixa) e entra na gaveta. Sem origem ele nasceria do nada.
+ */
+export class SupplyDto extends CashMovementDto {
+  @ApiPropertyOptional({
+    description: 'Conta de onde sai o dinheiro. Sem ela, vale o cofre do caixa.',
+  })
+  @IsOptional()
+  @IsString()
+  sourceAccountId?: string;
 }
 
 export class CashRegisterQueryDto {

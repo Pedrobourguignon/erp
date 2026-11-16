@@ -29,3 +29,6 @@ export function settlesAtSale(
 ): boolean {
   return isImmediatePayment(type) && !(settlementDays && settlementDays > 0);
 }
+
+/** Marks an AccountsPayable as the acquirer fee of a sale payment. */
+export const PAYMENT_FEE_KIND = 'PAYMENT_FEE';

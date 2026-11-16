@@ -347,17 +347,46 @@ export async function ensureOpenCashSession(
   // mais antigo, então "o primeiro da lista" virava qualquer caixa criado por
   // outra jornada (o segundo caixa da troca) assim que um existisse.
   const registers = await client.get("/cash-registers?limit=50&isActive=true");
-  const list = ((registers.body as { data?: { id: string; name: string; createdAt: string }[] }).data ?? [])
+  const list = ((registers.body as {
+    data?: { id: string; name: string; createdAt: string; financialAccountId: string }[];
+  }).data ?? [])
     .slice()
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   expect(list.length, "nenhum caixa cadastrado").toBeGreaterThan(0);
 
+  // Abrir não cria dinheiro (ADR 0003): declara o que a gaveta já tem e, se
+  // for pouco para o troco das jornadas, completa com dinheiro de um banco de
+  // teste — conta bancária pode ficar negativa, então nunca falta origem.
+  const drawer = await client.get(`/financial-accounts/${list[0].financialAccountId}`);
+  const inDrawer = Number((drawer.body as { data?: { balance?: number } }).data?.balance ?? 0);
+  const openingBalance = Math.max(inDrawer, 200);
   const opened = await client.post(`/cash-registers/${list[0].id}/open`, {
-    openingBalance: 200,
+    openingBalance,
+    ...(openingBalance > inDrawer ? { sourceAccountId: (await ensureTestBank(client)).id } : {}),
   });
   expect(opened.status, `abertura do caixa: ${JSON.stringify(opened.body)}`).toBe(201);
   const session = (opened.body as { data: { id: string } }).data;
   return { sessionId: session.id, cashRegisterId: list[0].id };
+}
+
+const TEST_BANK_NAME = "Banco E2E (fixture)";
+
+/**
+ * A conta bancária de onde as jornadas tiram dinheiro para a gaveta. Banco pode
+ * ficar negativo, então serve de origem sem saldo prévio. Reaproveitada entre
+ * execuções para não encher o cadastro de contas.
+ */
+export async function ensureTestBank(client: ApiClient): Promise<{ id: string; name: string }> {
+  const accounts = await client.get(`/financial-accounts?limit=100&search=${encodeURIComponent(TEST_BANK_NAME)}`);
+  const found = ((accounts.body as { data?: { id: string; name: string }[] }).data ?? []).find(
+    (a) => a.name === TEST_BANK_NAME
+  );
+  if (found) {
+    return found;
+  }
+  const created = await client.post("/financial-accounts", { name: TEST_BANK_NAME, type: "CHECKING" });
+  expect(created.status, `criação do banco de teste: ${JSON.stringify(created.body)}`).toBe(201);
+  return { id: (created.body as { data: { id: string } }).data.id, name: TEST_BANK_NAME };
 }
 
 /**

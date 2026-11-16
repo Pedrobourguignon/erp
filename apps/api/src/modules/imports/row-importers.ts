@@ -1,4 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
+import {
+  documentErrorMessage,
+  documentTypeOf,
+  formatDocument,
+  isValidDocument,
+  onlyDigits,
+} from '@erp/validators';
+import { isEmail } from 'class-validator';
 import { ImportType } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { CsvRow } from './csv-parser';
@@ -81,22 +89,55 @@ const importProduct: RowImporter = async (prisma, tenantId, row) => {
   });
 };
 
+/**
+ * Cliente de planilha passa pelas mesmas regras do cadastro: documento só com
+ * dígitos e com dígito verificador válido (AE-15, AE-04), sem duplicata na
+ * empresa, e-mail bem formado e também sem duplicata. CPF/CNPJ e e-mail são
+ * opcionais — linha sem eles entra normalmente.
+ */
 const importCustomer: RowImporter = async (prisma, tenantId, row) => {
   const name = required(row, 'name');
-  const document = row.document || null;
+
+  const rawDocument = row.document?.trim();
+  const document = rawDocument ? onlyDigits(rawDocument) : null;
+  if (document && !isValidDocument(document)) {
+    throw new BadRequestException(documentErrorMessage(documentTypeOf(document)));
+  }
+
+  const email = row.email?.trim() || null;
+  if (email && !isEmail(email)) {
+    throw new BadRequestException('E-mail inválido');
+  }
+
+  if (document) {
+    const sameDocument = await prisma.customer.findFirst({
+      where: { tenantId, document, deletedAt: null },
+      select: { id: true },
+    });
+    if (sameDocument) {
+      throw new BadRequestException(
+        `Já existe um cliente com o documento "${formatDocument(document)}"`,
+      );
+    }
+  }
+  if (email) {
+    const sameEmail = await prisma.customer.findFirst({
+      where: { tenantId, email, deletedAt: null },
+      select: { id: true },
+    });
+    if (sameEmail) {
+      throw new BadRequestException(`Já existe um cliente com o e-mail "${email}"`);
+    }
+  }
 
   await prisma.customer.create({
     data: {
       tenantId,
       name,
-      email: row.email || null,
+      email,
       phone: row.phone || null,
       document,
-      documentType: document
-        ? document.replace(/\D/g, '').length > 11
-          ? 'CNPJ'
-          : 'CPF'
-        : null,
+      documentType: documentTypeOf(document),
     },
   });
 };

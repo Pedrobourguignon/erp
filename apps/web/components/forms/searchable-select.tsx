@@ -48,6 +48,13 @@ interface SearchableSelectBaseProps {
    * que o operador trabalha com as duas mãos no teclado.
    */
   keepOpenOnSelect?: boolean;
+  /**
+   * A opção que o chamador já conhece e que pode não estar na lista carregada
+   * — o cliente que acabou de ser cadastrado na própria tela de venda. Só vale
+   * enquanto for o `value` escolhido; sem ela o campo ficava selecionado e
+   * mostrando o texto do placeholder.
+   */
+  selectedOption?: SelectOption | null;
 }
 
 interface SearchableSelectProps<TFieldValues extends FieldValues>
@@ -78,6 +85,7 @@ export function SearchableSelectBase({
   emptyMessage = "Nenhum resultado encontrado",
   selectFirstOnEnter = false,
   keepOpenOnSelect = false,
+  selectedOption: knownOption,
 }: SearchableSelectBaseProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -153,7 +161,9 @@ export function SearchableSelectBase({
 
   // Find selected label
   const allOptions = loadOptions ? asyncOptions : staticOptions ?? [];
-  const selectedOption = allOptions.find((o) => o.value === value);
+  const selectedOption =
+    allOptions.find((o) => o.value === value) ??
+    (knownOption && knownOption.value === value ? knownOption : undefined);
 
   const handleSelect = (option: SelectOption) => {
     onChange(option.value);

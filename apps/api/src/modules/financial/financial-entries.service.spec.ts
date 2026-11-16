@@ -650,6 +650,32 @@ describe('FinancialEntriesService', () => {
         });
       });
 
+      it.each([
+        // 22:00 BRT do dia 11 já é dia 12 em UTC — a tela mostrava 12/11 (TZ-01)
+        ['venda às 22h BRT', '2026-11-12T01:00:00.000Z', '2026-11-11T03:00:00.000Z'],
+        ['venda às 23h59 BRT', '2026-11-12T02:59:00.000Z', '2026-11-11T03:00:00.000Z'],
+        ['venda à meia-noite BRT', '2026-11-12T03:00:00.000Z', '2026-11-12T03:00:00.000Z'],
+        ['lançamento manual (meia-noite BRT)', '2026-11-11T03:00:00.000Z', '2026-11-11T03:00:00.000Z'],
+      ])('should date a transaction by the tenant day: %s', async (_name, createdAt, expected) => {
+        prisma.financialTransaction.findMany.mockResolvedValue([
+          {
+            id: 'trx-pix',
+            type: 'CREDIT',
+            amount: 100,
+            description: 'Venda balcão PED-000002 - PIX',
+            createdAt: new Date(createdAt),
+            accountId: 'acc-1',
+            chartAccountId: null,
+            chartAccount: null,
+          },
+        ]);
+        prisma.financialTransaction.count.mockResolvedValue(1);
+
+        const result = await service.findAll(TENANT_A, {});
+
+        expect(result.data[0].date.toISOString()).toBe(expected);
+      });
+
       it('should NOT restrict títulos to manual entries', async () => {
         await service.findAll(TENANT_A, {});
 

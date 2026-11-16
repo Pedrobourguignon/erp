@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import type { CustomerFormData } from "@/hooks/use-customers";
 import { useInvalidSubmit } from "@/hooks/use-invalid-submit";
 import { maskDocument, maskPhone } from "@/lib/masks";
-import { cn } from "@/lib/utils";
+import { cn, todayDateKey } from "@/lib/utils";
 
 // ─── Schema ─────────────────────────────────────────────────────────────
 
@@ -26,12 +26,20 @@ const customerSchema = z.object({
   // AE-04: counting digits accepted `111.111.111-11`. The real validation is
   // the check digit, and it comes from @erp/validators — the same one the API
   // uses.
+  // CPF/CNPJ é opcional (cliente de balcão); quando vem, tem que ser válido.
   document: z.string().max(18, "Documento muito longo"),
   email: z
     .string()
-    .min(1, "E-mail é obrigatório")
-    .email("E-mail inválido")
-    .max(255, "E-mail muito longo"),
+    .max(255, "E-mail muito longo")
+    .refine((value) => value === "" || z.string().email().safeParse(value).success, {
+      message: "E-mail inválido",
+    }),
+  // `YYYY-MM-DD` do <input type="date">; vazio = não informada.
+  birthDate: z.string().refine((value) => value === "" || value >= "1900-01-01", {
+    message: "Informe uma data de nascimento a partir de 1900",
+  }).refine((value) => value === "" || value <= todayDateKey(), {
+    message: "A data de nascimento não pode ser no futuro",
+  }),
   phone: z
     .string()
     .min(1, "Telefone é obrigatório")
@@ -46,7 +54,7 @@ const customerSchema = z.object({
 });
 
 const customerSchemaWithDocument = customerSchema.superRefine((data, ctx) => {
-  if (!isValidDocument(data.document, data.documentType)) {
+  if (data.document !== "" && !isValidDocument(data.document, data.documentType)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["document"],
@@ -63,8 +71,34 @@ interface CustomerFormProps {
   mode: "create" | "edit";
   defaultValues?: Partial<CustomerFormValues>;
   isSaving?: boolean;
+  /**
+   * Dentro de um modal: sem o cartão em volta e sem a linha do rodapé — o
+   * diálogo já é a moldura.
+   */
+  embedded?: boolean;
   onSubmit: (values: CustomerFormData) => Promise<void>;
   onCancel: () => void;
+}
+
+/** Cartão na página; sem moldura própria dentro de um modal. */
+function FormShell({
+  embedded,
+  children,
+}: {
+  embedded: boolean;
+  children: React.ReactNode;
+}) {
+  if (embedded) {
+    return <div className="space-y-4">{children}</div>;
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Dados do Cliente</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">{children}</CardContent>
+    </Card>
+  );
 }
 
 /**
@@ -79,6 +113,7 @@ export function CustomerForm({
   mode,
   defaultValues,
   isSaving,
+  embedded = false,
   onSubmit,
   onCancel,
 }: CustomerFormProps) {
@@ -96,6 +131,7 @@ export function CustomerForm({
       document: "",
       email: "",
       phone: "",
+      birthDate: "",
       ...defaultValues,
     },
   });
@@ -103,20 +139,37 @@ export function CustomerForm({
 
   const documentType = watch("documentType");
 
+  const submit = handleSubmit(
+    (values) =>
+      onSubmit({
+        ...values,
+        // Campo em branco é "sem valor", não uma string vazia: a API recusa ""
+        // como e-mail, e `null` é o que apaga na edição.
+        document: values.document || null,
+        documentType: values.document ? values.documentType : null,
+        email: values.email || null,
+        birthDate: values.birthDate || null,
+      }),
+    onInvalid,
+  );
+
   const fieldError = (field: keyof CustomerFormValues) =>
     errors[field]?.message as string | undefined;
 
   return (
     <form
-      onSubmit={handleSubmit((values) => onSubmit(values), onInvalid)}
+      onSubmit={(event) => {
+        // Num modal, o submit não pode subir (pela árvore do React, que atravessa
+        // o portal) até o formulário da venda que está por baixo.
+        if (embedded) {
+          event.stopPropagation();
+        }
+        return submit(event);
+      }}
       className="space-y-6"
       noValidate
     >
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Dados do Cliente</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <FormShell embedded={embedded}>
           <div className="flex gap-2">
             {(["CPF", "CNPJ"] as const).map((type) => (
               <label
@@ -153,7 +206,7 @@ export function CustomerForm({
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">
-                {documentType === "CPF" ? "CPF" : "CNPJ"} *
+                {documentType === "CPF" ? "CPF" : "CNPJ"}
               </label>
               <Input
                 {...register("document")}
@@ -175,7 +228,7 @@ export function CustomerForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-sm font-medium">E-mail *</label>
+              <label className="text-sm font-medium">E-mail</label>
               <Input
                 {...register("email")}
                 type="email"
@@ -201,10 +254,30 @@ export function CustomerForm({
               ) : null}
             </div>
           </div>
-        </CardContent>
-      </Card>
 
-      <div className="flex items-center justify-end gap-3 border-t pt-6">
+          <div className="space-y-1 sm:max-w-[calc(50%-0.5rem)]">
+            <label className="text-sm font-medium" htmlFor="customer-birth-date">
+              Data de nascimento
+            </label>
+            <Input
+              id="customer-birth-date"
+              type="date"
+              min="1900-01-01"
+              max={todayDateKey()}
+              {...register("birthDate")}
+            />
+            {fieldError("birthDate") ? (
+              <p className="text-xs text-destructive">{fieldError("birthDate")}</p>
+            ) : null}
+          </div>
+      </FormShell>
+
+      <div
+        className={cn(
+          "flex items-center justify-end gap-3",
+          !embedded && "border-t pt-6"
+        )}
+      >
         <Button type="button" variant="cancel" onClick={onCancel}>
           Cancelar
         </Button>

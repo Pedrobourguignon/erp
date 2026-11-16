@@ -42,6 +42,14 @@ export class CreatePaymentMethodDto {
   @Min(0)
   settlementDays?: number;
 
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Baixa os títulos desta forma sozinho, no dia do vencimento.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  autoSettle?: boolean;
+
   @ApiPropertyOptional({ default: false })
   @IsOptional()
   @IsBoolean()
@@ -89,6 +97,14 @@ export class UpdatePaymentMethodDto {
   @IsNumber()
   @Min(0)
   settlementDays?: number;
+
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Baixa os títulos desta forma sozinho, no dia do vencimento.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  autoSettle?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -17,7 +17,8 @@ import {
   UpdateCashRegisterDto,
   OpenSessionDto,
   CloseSessionDto,
-  CashMovementDto,
+  SupplyDto,
+  WithdrawDto,
   CashRegisterQueryDto,
   SessionQueryDto,
 } from './dto/cash-register.dto';
@@ -121,7 +122,7 @@ export class CashRegistersController {
     @CurrentTenant() tenantId: string,
     @CurrentUser() userId: string,
     @Param('id') id: string,
-    @Body() dto: CashMovementDto,
+    @Body() dto: SupplyDto,
   ) {
     const movement = await this.cashRegistersService.supply(
       tenantId,
@@ -135,12 +136,12 @@ export class CashRegistersController {
   @Post('cash-registers/:id/withdraw')
   @RequirePermissions('financial:create')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Withdraw (sangria) from the open session' })
+  @ApiOperation({ summary: 'Sangria: transfere dinheiro da gaveta para a conta de destino' })
   async withdraw(
     @CurrentTenant() tenantId: string,
     @CurrentUser() userId: string,
     @Param('id') id: string,
-    @Body() dto: CashMovementDto,
+    @Body() dto: WithdrawDto,
   ) {
     const movement = await this.cashRegistersService.withdraw(
       tenantId,

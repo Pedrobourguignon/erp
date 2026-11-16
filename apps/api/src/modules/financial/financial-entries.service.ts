@@ -603,7 +603,9 @@ export class FinancialEntriesService {
             : 'EXPENSE',
       description: row.description,
       amount: toMoney(row.amount),
-      date: row.createdAt,
+      // `createdAt` is an instant (UTC); the screen reads `date` as a civil
+      // date. Without this a sale after 21:00 in UTC-3 showed the next day (TZ-01).
+      date: startOfDayInTz(toLocalDateKey(row.createdAt)),
       status: 'PAID',
       accountId: row.accountId,
       accountName: accounts.get(row.accountId) ?? null,

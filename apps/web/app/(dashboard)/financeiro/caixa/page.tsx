@@ -17,6 +17,7 @@ import {
 import {
   useCashRegisters,
   useCashRegisterSession,
+  type CashMovement,
   type CashRegister,
 } from "@/hooks/use-cash-registers";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
@@ -24,12 +25,36 @@ import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { CashRegisterCard } from "./_components/cash-register-card";
 import {
   CreateCashRegisterDialog,
-  OpenSessionDialog,
   CloseSessionDialog,
-  MovementDialog,
 } from "./_components/cash-register-dialogs";
+import { DrawerTransferDialog } from "./_components/drawer-transfer-dialog";
+import { OpenSessionDialog } from "./_components/open-session-dialog";
 import { SessionHistory } from "./_components/session-history";
 
+
+// ─── Movimentos da gaveta ─────────────────────────────────────────────
+
+/**
+ * Sangria e suprimento são transferências: têm a conta do outro lado (o cofre,
+ * o banco). Um movimento sem ela é a gaveta espelhando uma baixa — pagamento
+ * ou recebimento feito pelo caixa — ou um registro anterior à transferência.
+ * Chamar esses de "Sangria"/"Suprimento" esconderia que o dinheiro não veio
+ * de conta nenhuma nem foi guardado em lugar algum.
+ */
+function movementLabel(mov: CashMovement): string {
+  if (mov.type === "SUPPLY") {
+    return mov.counterpartAccount ? "Suprimento" : "Entrada";
+  }
+  return mov.counterpartAccount ? "Sangria" : "Saída";
+}
+
+function movementDetail(mov: CashMovement): string {
+  if (!mov.counterpartAccount) {
+    return mov.reason;
+  }
+  const arrow = mov.type === "SUPPLY" ? "←" : "→";
+  return `${arrow} ${mov.counterpartAccount.name} · ${mov.reason}`;
+}
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
@@ -101,8 +126,8 @@ function CashRegistersPageContent() {
       <CreateCashRegisterDialog open={createOpen} onOpenChange={setCreateOpen} />
       <OpenSessionDialog register={openTarget} onClose={() => setOpenTarget(null)} />
       <CloseSessionDialog register={closeTarget} onClose={() => setCloseTarget(null)} />
-      <MovementDialog register={supplyTarget} type="supply" onClose={() => setSupplyTarget(null)} />
-      <MovementDialog register={withdrawTarget} type="withdraw" onClose={() => setWithdrawTarget(null)} />
+      <DrawerTransferDialog direction="supply" register={supplyTarget} onClose={() => setSupplyTarget(null)} />
+      <DrawerTransferDialog direction="withdraw" register={withdrawTarget} onClose={() => setWithdrawTarget(null)} />
       <SessionDetailDialog register={viewTarget} onClose={() => setViewTarget(null)} />
     </div>
   );
@@ -259,13 +284,13 @@ function SessionDetailDialog({
                           variant={mov.type === "SUPPLY" ? "success" : "destructive"}
                           className="mr-2 shrink-0"
                         >
-                          {mov.type === "SUPPLY" ? "Suprimento" : "Sangria"}
+                          {movementLabel(mov)}
                         </Badge>
                         <span
                           className="truncate text-muted-foreground"
-                          title={mov.reason}
+                          title={movementDetail(mov)}
                         >
-                          {mov.reason}
+                          {movementDetail(mov)}
                         </span>
                       </div>
                       <span className="shrink-0 font-medium">

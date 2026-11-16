@@ -27,10 +27,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import {
   useCreateCashRegister,
-  useOpenCashRegister,
   useCloseCashRegister,
-  useCashSupply,
-  useCashWithdraw,
   type CashRegister,
 } from "@/hooks/use-cash-registers";
 import { useFinancialAccounts } from "@/hooks/use-financial-accounts";
@@ -52,7 +49,11 @@ const coerceNumber = (val: unknown) => {
 const createSchema = z.object({
   name: z.string().min(1, "Nome obrigatório").max(100),
   financialAccountId: z.string().min(1, "Conta financeira obrigatória"),
+  /** Cofre do caixa: destino da sangria e origem do suprimento. Opcional: sem ele, cada um pede a conta. */
+  vaultAccountId: z.string(),
 });
+
+const NO_VAULT_ACCOUNT = "__none";
 
 type CreateFormValues = z.infer<typeof createSchema>;
 
@@ -69,19 +70,22 @@ export function CreateCashRegisterDialog({
 
   const accounts = accountsData?.data ?? [];
 
-  const { register, handleSubmit, control, reset, formState: { errors } } =
+  const { register, handleSubmit, control, reset, watch, formState: { errors } } =
     useForm<CreateFormValues>({
       resolver: zodResolver(createSchema),
-      defaultValues: { name: "", financialAccountId: "" },
+      defaultValues: { name: "", financialAccountId: "", vaultAccountId: NO_VAULT_ACCOUNT },
     });
+  const drawerAccountId = watch("financialAccountId");
 
   React.useEffect(() => {
     if (open) {reset();}
   }, [open, reset]);
 
-  const onSubmit = async (data: CreateFormValues) => {
+  const onSubmit = async ({ vaultAccountId, ...data }: CreateFormValues) => {
     try {
-      await mutation.mutateAsync(data);
+      const hasVaultAccount =
+        vaultAccountId !== NO_VAULT_ACCOUNT && vaultAccountId !== data.financialAccountId;
+      await mutation.mutateAsync(hasVaultAccount ? { ...data, vaultAccountId } : data);
       addToast("Caixa criado com sucesso!", "success");
       onOpenChange(false);
     } catch (err) {
@@ -106,18 +110,18 @@ export function CreateCashRegisterDialog({
           noValidate
         >
           <div className="space-y-1">
-            <label className="text-sm font-medium">Nome *</label>
-            <Input {...register("name")} placeholder="Ex: Caixa 01" maxLength={100} />
+            <label htmlFor="register-name" className="text-sm font-medium">Nome *</label>
+            <Input id="register-name" {...register("name")} placeholder="Ex: Caixa 01" maxLength={100} />
             {errors.name ? <p className="text-xs text-destructive">{errors.name.message}</p> : null}
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">Conta Financeira *</label>
+            <label htmlFor="register-account" className="text-sm font-medium">Conta Financeira *</label>
             <Controller
               name="financialAccountId"
               control={control}
               render={({ field }) => (
                 <Select value={field.value} onValueChange={field.onChange}>
-                  <SelectTrigger>
+                  <SelectTrigger id="register-account">
                     <SelectValue placeholder="Selecione uma conta" />
                   </SelectTrigger>
                   <SelectContent>
@@ -132,119 +136,39 @@ export function CreateCashRegisterDialog({
             />
             {errors.financialAccountId ? <p className="text-xs text-destructive">{errors.financialAccountId.message}</p> : null}
           </div>
+          <div className="space-y-1">
+            <label htmlFor="register-vault-account" className="text-sm font-medium">Cofre do caixa</label>
+            <Controller
+              name="vaultAccountId"
+              control={control}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger id="register-vault-account">
+                    <SelectValue placeholder="Escolher a cada operação" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_VAULT_ACCOUNT}>Escolher a cada operação</SelectItem>
+                    {accounts
+                      .filter((acc) => acc.id !== drawerAccountId)
+                      .map((acc) => (
+                        <SelectItem key={acc.id} value={acc.id}>
+                          {acc.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              Para onde vai a sangria e de onde vem o suprimento. Dá para trocar na hora da operação.
+            </p>
+            {errors.vaultAccountId ? <p className="text-xs text-destructive">{errors.vaultAccountId.message}</p> : null}
+          </div>
           <DialogFooter>
             <Button type="button" variant="cancel" onClick={() => onOpenChange(false)}>Cancelar</Button>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Criar
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── Open Session Dialog ───────────────────────────────────────────────
-
-const openSchema = z.object({
-  openingBalance: z.preprocess(coerceNumber, z.number().min(0, "Valor inválido")),
-});
-
-type OpenFormValues = z.infer<typeof openSchema>;
-
-export function OpenSessionDialog({
-  register: reg,
-  onClose,
-}: {
-  register: CashRegister | null;
-  onClose: () => void;
-}) {
-  const mutation = useOpenCashRegister();
-  const { data: accountsData } = useFinancialAccounts({ isActive: true });
-  const { addToast } = useToast();
-
-  // A conta do caixa é a gaveta, inclusive de um dia para o outro: o troco que
-  // ficou de ontem já está nela. O saldo dela é o palpite certo de abertura, e
-  // só o que passar disso é dinheiro novo entrando.
-  const account = (accountsData?.data ?? []).find(
-    (acc) => acc.id === reg?.financialAccountId
-  );
-  const balanceInDrawer = Number(account?.balance ?? 0);
-
-  const { handleSubmit, control, reset, watch } = useForm<OpenFormValues>({
-    resolver: zodResolver(openSchema),
-    defaultValues: { openingBalance: 0 },
-  });
-
-  React.useEffect(() => {
-    if (reg) {reset({ openingBalance: balanceInDrawer });}
-  }, [reg, balanceInDrawer, reset]);
-
-  const declared = watch("openingBalance") || 0;
-  const externalSupply = declared - balanceInDrawer;
-
-  const onSubmit = async (data: OpenFormValues) => {
-    if (!reg) {
-      return;
-    }
-    try {
-      await mutation.mutateAsync({ id: reg.id, openingBalance: data.openingBalance });
-      addToast("Caixa aberto com sucesso!", "success");
-      onClose();
-    } catch (err) {
-      addToast(
-        getMutationErrorMessage(
-          err,
-          "Erro ao abrir caixa. Tente novamente."
-        ),
-        "error"
-      );
-    }
-  };
-
-  return (
-    <Dialog open={!!reg} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Abrir Caixa - {reg?.name}</DialogTitle>
-          <DialogDescription>Informe o saldo de abertura.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4"
-          noValidate
-        >
-          {account ? (
-            <p className="rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-              A conta <span className="font-medium text-foreground">{account.name}</span>{" "}
-              acusa{" "}
-              <span className="font-medium text-foreground">
-                {formatCurrency(balanceInDrawer)}
-              </span>{" "}
-              na gaveta. Informe o total que está lá agora.
-            </p>
-          ) : null}
-
-          <MoneyInput name="openingBalance" control={control} label="Saldo de Abertura" />
-
-          {externalSupply > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {formatCurrency(externalSupply)} serão lançados como suprimento —
-              dinheiro entrando de fora.
-            </p>
-          ) : null}
-          {externalSupply < 0 ? (
-            <p className="text-xs text-destructive">
-              Faltam {formatCurrency(-externalSupply)} em relação ao que a conta
-              acusa. Registre a sangria ou a transferência do que saiu antes de
-              abrir.
-            </p>
-          ) : null}
-
-          <DialogFooter>
-            <Button type="button" variant="cancel" onClick={onClose}>Cancelar</Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Abrir
             </Button>
           </DialogFooter>
         </form>
@@ -491,93 +415,6 @@ export function CloseSessionDialog({
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Fechar Caixa
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── Supply / Withdraw Dialog ──────────────────────────────────────────
-
-const movementSchema = z.object({
-  amount: z.preprocess(coerceNumber, z.number().min(0.01, "Valor obrigatório")),
-  reason: z.string().min(1, "Motivo obrigatório").max(255),
-});
-
-type MovementFormValues = z.infer<typeof movementSchema>;
-
-export function MovementDialog({
-  register: reg,
-  type,
-  onClose,
-}: {
-  register: CashRegister | null;
-  type: "supply" | "withdraw";
-  onClose: () => void;
-}) {
-  const supplyMutation = useCashSupply();
-  const withdrawMutation = useCashWithdraw();
-  const { addToast } = useToast();
-
-  const mutation = type === "supply" ? supplyMutation : withdrawMutation;
-  const title = type === "supply" ? "Suprimento" : "Sangria";
-
-  const { register: formRegister, handleSubmit, control, reset, formState: { errors } } =
-    useForm<MovementFormValues>({
-      resolver: zodResolver(movementSchema),
-      defaultValues: { amount: 0, reason: "" },
-    });
-
-  React.useEffect(() => {
-    if (reg) {reset({ amount: 0, reason: "" });}
-  }, [reg, reset]);
-
-  const onSubmit = async (data: MovementFormValues) => {
-    if (!reg) {
-      return;
-    }
-    try {
-      await mutation.mutateAsync({ id: reg.id, ...data });
-      addToast(`${title} realizado com sucesso!`, "success");
-      onClose();
-    } catch (err) {
-      addToast(
-        getMutationErrorMessage(
-          err,
-          `Erro ao realizar ${title.toLowerCase()}. Tente novamente.`
-        ),
-        "error"
-      );
-    }
-  };
-
-  return (
-    <Dialog open={!!reg} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title} - {reg?.name}</DialogTitle>
-          <DialogDescription>
-            {type === "supply"
-              ? "Adicione dinheiro ao caixa."
-              : "Retire dinheiro do caixa."}
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4"
-          noValidate
-        >
-          <MoneyInput name="amount" control={control} label="Valor" />
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Motivo *</label>
-            <Input {...formRegister("reason")} placeholder="Motivo da movimentação" maxLength={255} />
-            {errors.reason ? <p className="text-xs text-destructive">{errors.reason.message}</p> : null}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="cancel" onClick={onClose}>Cancelar</Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Confirmar
             </Button>
           </DialogFooter>
         </form>

@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
+import { financialAccountKeys } from "@/hooks/use-financial-accounts";
 import api from "@/lib/api";
 
 // ─── Types ─────────────────────────────────────────────────────────────
@@ -50,6 +51,11 @@ export interface CashMovement {
   reason: string;
   createdAt: string;
   performedBy?: { id: string; name: string };
+  /**
+   * A conta do outro lado: destino da sangria, origem do suprimento. Nulo nos
+   * movimentos espelhados de baixas e nos anteriores à transferência.
+   */
+  counterpartAccount?: { id: string; name: string } | null;
 }
 
 /**
@@ -69,6 +75,9 @@ export interface CashRegister {
   id: string;
   name: string;
   financialAccountId: string;
+  /** Cofre: destino padrão da sangria e origem padrão do suprimento. */
+  vaultAccountId?: string | null;
+  vaultAccount?: { id: string; name: string } | null;
   isActive: boolean;
   currentSession?: CashRegisterSession;
 }
@@ -76,6 +85,16 @@ export interface CashRegister {
 export interface CreateCashRegisterPayload {
   name: string;
   financialAccountId: string;
+  vaultAccountId?: string;
+}
+
+export interface UpdateCashRegisterPayload {
+  id: string;
+  name?: string;
+  financialAccountId?: string;
+  /** `null` remove o cofre do caixa. */
+  vaultAccountId?: string | null;
+  isActive?: boolean;
 }
 
 // ─── Params ────────────────────────────────────────────────────────────
@@ -106,6 +125,8 @@ interface CashRegisterRaw {
   id: string;
   name: string;
   financialAccountId: string;
+  vaultAccountId?: string | null;
+  vaultAccount?: { id: string; name: string } | null;
   isActive: boolean;
   sessions?: CashRegisterSession[];
   currentSession?: CashRegisterSession;
@@ -156,13 +177,16 @@ export function useOpenCashRegister() {
     mutationFn: async ({
       id,
       openingBalance,
+      sourceAccountId,
     }: {
       id: string;
       openingBalance: number;
+      /** De onde vem o fundo acima do saldo da gaveta. Sem ela, o cofre do caixa. */
+      sourceAccountId?: string;
     }) => {
       const { data } = await api.post<ApiResponse<CashRegisterSession>>(
         `/cash-registers/${id}/open`,
-        { openingBalance }
+        { openingBalance, sourceAccountId }
       );
       return data;
     },
@@ -171,6 +195,8 @@ export function useOpenCashRegister() {
       // sessões (`sessionList(params)`) intacta — o operador fechava o caixa e
       // a tela continuava mostrando "Aberto".
       queryClient.invalidateQueries({ queryKey: cashRegisterKeys.all });
+      // O fundo que faltava saiu de uma conta (o cofre): o saldo dela mudou.
+      queryClient.invalidateQueries({ queryKey: financialAccountKeys.all });
     },
   });
 }
@@ -217,14 +243,17 @@ export function useCashSupply() {
       id,
       amount,
       reason,
+      sourceAccountId,
     }: {
       id: string;
       amount: number;
       reason: string;
+      /** Sem ela, a API usa o cofre do caixa (e recusa se não houver). */
+      sourceAccountId?: string;
     }) => {
       const { data } = await api.post<ApiResponse<CashMovement>>(
         `/cash-registers/${id}/supply`,
-        { amount, reason }
+        { amount, reason, sourceAccountId }
       );
       return data;
     },
@@ -233,6 +262,8 @@ export function useCashSupply() {
       // sessões (`sessionList(params)`) intacta — o operador fechava o caixa e
       // a tela continuava mostrando "Aberto".
       queryClient.invalidateQueries({ queryKey: cashRegisterKeys.all });
+      // O suprimento é transferência: o saldo da conta de origem mudou.
+      queryClient.invalidateQueries({ queryKey: financialAccountKeys.all });
     },
   });
 }
@@ -245,14 +276,17 @@ export function useCashWithdraw() {
       id,
       amount,
       reason,
+      destinationAccountId,
     }: {
       id: string;
       amount: number;
       reason: string;
+      /** Sem ela, a API usa a conta padrão do caixa (e recusa se não houver). */
+      destinationAccountId?: string;
     }) => {
       const { data } = await api.post<ApiResponse<CashMovement>>(
         `/cash-registers/${id}/withdraw`,
-        { amount, reason }
+        { amount, reason, destinationAccountId }
       );
       return data;
     },
@@ -260,6 +294,25 @@ export function useCashWithdraw() {
       // FN-11: o prefixo inteiro. Invalidar só `lists()` deixava a tabela de
       // sessões (`sessionList(params)`) intacta — o operador fechava o caixa e
       // a tela continuava mostrando "Aberto".
+      queryClient.invalidateQueries({ queryKey: cashRegisterKeys.all });
+      // A sangria é transferência: o saldo da conta de destino mudou.
+      queryClient.invalidateQueries({ queryKey: financialAccountKeys.all });
+    },
+  });
+}
+
+export function useUpdateCashRegister() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: UpdateCashRegisterPayload) => {
+      const { data } = await api.patch<ApiResponse<CashRegister>>(
+        `/cash-registers/${id}`,
+        payload
+      );
+      return data;
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: cashRegisterKeys.all });
     },
   });

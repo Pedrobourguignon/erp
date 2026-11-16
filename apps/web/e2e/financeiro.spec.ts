@@ -205,9 +205,25 @@ test.describe("financeiro", () => {
     )[0];
     test.skip(!open, "nenhuma sessão de caixa aberta");
 
+    // A sangria é transferência e exige destino; sem ele a recusa seria pela
+    // falta de conta, não pelo saldo — verde pelo motivo errado.
+    const registers = await apiClient.get("/cash-registers?limit=50");
+    const drawerAccountId = (
+      (registers.body as { data?: { id: string; financialAccountId: string }[] }).data ?? []
+    ).find((r) => r.id === open!.cashRegisterId)?.financialAccountId;
+    const accounts = await apiClient.get("/financial-accounts?limit=50&isActive=true");
+    const destination = (
+      (accounts.body as { data?: { id: string }[] }).data ?? []
+    ).find((a) => a.id !== drawerAccountId);
+    test.skip(!destination, "nenhuma conta além da gaveta para receber a sangria");
+
     const withdraw = await apiClient.post(
       `/cash-registers/${open!.cashRegisterId}/withdraw`,
-      { amount: 999999, reason: "Sangria impossível do teste E2E" }
+      {
+        amount: 999999,
+        reason: "Sangria impossível do teste E2E",
+        destinationAccountId: destination!.id,
+      }
     );
 
     expect(withdraw.status).toBe(400);
@@ -234,11 +250,22 @@ test.describe("financeiro", () => {
     const accountId = found!.financialAccountId!;
     const before = await accountBalance(apiClient, accountId);
 
+    // O suprimento é transferência e exige origem. Uma conta bancária pode ficar
+    // negativa, então serve de origem sem precisar de saldo prévio.
+    const bank = await apiClient.post("/financial-accounts", {
+      name: `Banco E2E ${stamp()}`,
+      type: "CHECKING",
+    });
+    expect(bank.status, JSON.stringify(bank.body)).toBe(201);
+    const bankId = (bank.body as { data: { id: string } }).data.id;
+
     const supply = await apiClient.post(`/cash-registers/${open!.cashRegisterId}/supply`, {
       amount: 50,
       reason: "Suprimento do teste E2E",
+      sourceAccountId: bankId,
     });
     expect(supply.status, JSON.stringify(supply.body)).toBeLessThan(300);
+    expect(await accountBalance(apiClient, bankId)).toBe(-50);
 
     // Sem isto, a conta ficava em R$ 0,00 depois de um dia inteiro de operação.
     const after = await waitFor(

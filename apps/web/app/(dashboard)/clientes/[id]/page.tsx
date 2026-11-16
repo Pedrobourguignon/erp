@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  Cake,
   Mail,
   Phone,
   ShoppingCart,
@@ -26,10 +27,12 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { useCustomer, useDeleteCustomer } from "@/hooks/use-customers";
 import { useOrders, type OrderListItem } from "@/hooks/use-orders";
+import { customerTypeLabel } from "@/lib/customer-type";
 import { maskDocument, maskPhone } from "@/lib/masks";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
 import {
   formatCurrency,
+  formatDate,
   formatDateTime,
   cn,
 } from "@/lib/utils";
@@ -115,10 +118,14 @@ export default function CustomerDetailPage() {
                 text={customer.name}
                 className="text-3xl font-bold tracking-tight"
               />
-              <Badge variant="outline" className="shrink-0">{customer.documentType === "CPF" ? "Pessoa Física" : "Pessoa Jurídica"}</Badge>
+              <Badge variant="outline" className="shrink-0">{customerTypeLabel(customer.documentType)}</Badge>
             </div>
             <p className="text-muted-foreground font-mono">
-              {customer.documentType ? maskDocument(customer.document, customer.documentType) : customer.document}
+              {customer.document
+                ? customer.documentType
+                  ? maskDocument(customer.document, customer.documentType)
+                  : customer.document
+                : "Documento não informado"}
             </p>
           </div>
         </div>
@@ -206,7 +213,11 @@ function SummaryCard({ icon, label, value }: { icon: React.ReactNode; label: str
 
 // ─── Info tab ───────────────────────────────────────────────────────────
 
-function InfoTab({ customer }: { customer: { email: string; phone: string | null; createdAt: string } }) {
+function InfoTab({
+  customer,
+}: {
+  customer: { email: string | null; phone: string | null; birthDate: string | null; createdAt: string };
+}) {
   return (
     <Card>
       <CardHeader>
@@ -216,12 +227,18 @@ function InfoTab({ customer }: { customer: { email: string; phone: string | null
         <div className="flex min-w-0 items-center gap-3">
           <Mail className="h-5 w-5 shrink-0 text-muted-foreground" />
           {/* Um e-mail é uma palavra só: não quebra em 390px e sai do cartão. */}
-          <TruncatedText text={customer.email} />
+          <TruncatedText text={customer.email ?? ""} fallback="E-mail não informado" />
         </div>
         <div className="flex min-w-0 items-center gap-3">
           <Phone className="h-5 w-5 shrink-0 text-muted-foreground" />
           <TruncatedText text={maskPhone(customer.phone)} fallback="Telefone não informado" />
         </div>
+        {customer.birthDate ? (
+          <div className="flex min-w-0 items-center gap-3">
+            <Cake className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <span>Nascimento: {formatDate(customer.birthDate)}</span>
+          </div>
+        ) : null}
         <div className="text-sm text-muted-foreground">
           Cliente desde {formatDateTime(customer.createdAt)}
         </div>

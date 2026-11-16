@@ -111,6 +111,7 @@ const methodSchema = z.object({
     .min(0, "O prazo de liquidação não pode ser negativo")
     .max(365, "O prazo máximo é 365 dias")
     .default(0),
+  autoSettle: z.boolean().default(false),
   requiresAuthorization: z.boolean().default(false),
   fiscalCode: z.string().max(5).optional(),
   defaultAccountId: z.string().optional(),
@@ -125,6 +126,14 @@ const methodSchemaWithAccount = methodSchema.superRefine((data, ctx) => {
       code: z.ZodIssueCode.custom,
       path: ["defaultAccountId"],
       message: "Formas à vista precisam de uma conta financeira vinculada",
+    });
+  }
+  // Espelha a API: baixa automática sem conta falharia em silêncio todo dia.
+  if (data.autoSettle && !data.defaultAccountId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["defaultAccountId"],
+      message: "A baixa automática precisa de uma conta financeira vinculada",
     });
   }
 });
@@ -449,6 +458,7 @@ function MethodFormDialog({
       type: "CASH",
       feePercentage: 0,
       settlementDays: 0,
+      autoSettle: false,
       requiresAuthorization: false,
       fiscalCode: "",
       defaultAccountId: "",
@@ -471,6 +481,7 @@ function MethodFormDialog({
               type: editing.type,
               feePercentage: editing.feePercentage,
               settlementDays: editing.settlementDays,
+              autoSettle: editing.autoSettle ?? false,
               requiresAuthorization: editing.requiresAuthorization,
               fiscalCode: editing.fiscalCode ?? "",
               defaultAccountId: editing.defaultAccountId ?? "",
@@ -481,6 +492,7 @@ function MethodFormDialog({
               type: "CASH",
               feePercentage: 0,
               settlementDays: 0,
+                              autoSettle: false,
               requiresAuthorization: false,
               fiscalCode: "",
               defaultAccountId: "",
@@ -494,7 +506,10 @@ function MethodFormDialog({
 
   const onSubmit = async (data: MethodFormValues) => {
     // Empty selection means "no linked account"
-    const payload = { ...data, defaultAccountId: data.defaultAccountId || undefined };
+    const payload = {
+      ...data,
+      defaultAccountId: data.defaultAccountId || undefined,
+    };
     try {
       if (editing) {
         await updateMutation.mutateAsync({ id: editing.id, ...payload });
@@ -644,6 +659,14 @@ function MethodFormDialog({
                 className="h-4 w-4 rounded border-input"
               />
               Exige autorizacao
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                {...register("autoSettle")}
+                className="h-4 w-4 rounded border-input"
+              />
+              Dar baixa automática no dia da liquidação
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input

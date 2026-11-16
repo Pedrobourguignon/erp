@@ -100,6 +100,8 @@ function EditCustomerPageContent() {
           ),
           email: customer.email ?? "",
           phone: maskPhone(customer.phone ?? ""),
+          // Data civil: o dia vem à frente do "T" — sem conversão de fuso.
+          birthDate: customer.birthDate ? customer.birthDate.slice(0, 10) : "",
         }}
         onSubmit={handleSubmit}
         onCancel={() => router.back()}

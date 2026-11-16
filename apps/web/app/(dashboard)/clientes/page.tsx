@@ -38,6 +38,7 @@ import {
   type CustomerSegment,
 } from "@/hooks/use-customers";
 import { useFilters } from "@/hooks/use-filters";
+import { customerTypeLabel } from "@/lib/customer-type";
 import { maskDocument, maskPhone } from "@/lib/masks";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
 
@@ -117,7 +118,7 @@ const columns: ColumnDef<CustomerListItem>[] = [
     accessor: "documentType",
     cell: (row) => (
       <Badge variant="outline" className="text-xs">
-        {row.documentType === "CPF" ? "Pessoa Física" : "Pessoa Jurídica"}
+        {customerTypeLabel(row.documentType)}
       </Badge>
     ),
   },
@@ -130,9 +131,11 @@ const columns: ColumnDef<CustomerListItem>[] = [
       <span className="font-mono text-xs">
         {/* VD-16: sem `documentType` o fallback mostrava o documento cru.
             `formatDocument` deduz pelo número de dígitos. */}
-        {row.documentType
-          ? maskDocument(row.document, row.documentType)
-          : formatDocument(row.document)}
+        {row.document
+          ? row.documentType
+            ? maskDocument(row.document, row.documentType)
+            : formatDocument(row.document)
+          : "—"}
       </span>
     ),
   },
@@ -143,7 +146,7 @@ const columns: ColumnDef<CustomerListItem>[] = [
     header: "E-mail",
     accessor: "email",
     cell: (row) => (
-      <span className="text-sm text-muted-foreground">{row.email}</span>
+      <span className="text-sm text-muted-foreground">{row.email ?? "—"}</span>
     ),
   },
   {

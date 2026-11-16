@@ -28,8 +28,10 @@ import { PaymentSelector } from "@/components/forms/payment-selector";
 import {
   SearchableSelect,
   SearchableSelectBase,
+  type SelectOption,
 } from "@/components/forms/searchable-select";
 import { Button } from "@/components/ui/button";
+import { NewCustomerButton } from "@/components/forms/customer-quick-create-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -67,8 +69,8 @@ const PRODUCT_PAGE_SIZE = 20;
 interface CustomerOption {
   id: string;
   name: string;
-  document: string;
-  email: string;
+  document: string | null;
+  email: string | null;
 }
 
 interface ProductResult {
@@ -279,6 +281,8 @@ export default function CounterSalePage() {
 
   // An immediate payment without a linked account is refused by the API (SCRUM-30)
   const [hasMissingAccount, setHasMissingAccount] = useState(false);
+  // Cliente cadastrado agora, na própria tela: ainda não veio da busca.
+  const [createdCustomer, setCreatedCustomer] = useState<SelectOption | null>(null);
 
   // Product search state
   /**
@@ -346,7 +350,7 @@ export default function CounterSalePage() {
     return (data.data ?? []).map((c) => ({
       value: c.id,
       label: c.name,
-      description: c.document,
+      description: c.document ?? undefined,
     }));
   }, []);
 
@@ -605,8 +609,17 @@ export default function CounterSalePage() {
           <div className="space-y-6 lg:col-span-2">
             {/* Customer */}
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-lg">Cliente</CardTitle>
+                <NewCustomerButton
+                  onCreated={(customer) => {
+                    setCreatedCustomer(customer);
+                    setValue("customerId", customer.value, {
+                      shouldValidate: true,
+                      shouldDirty: true,
+                    });
+                  }}
+                />
               </CardHeader>
               <CardContent>
                 {/* VD-18: F4 abre este seletor. O SearchableSelect não
@@ -618,6 +631,7 @@ export default function CounterSalePage() {
                     control={control}
                     loadOptions={loadCustomers}
                     placeholder="Buscar cliente por nome ou documento..."
+                    selectedOption={createdCustomer}
                     error={errors.customerId?.message}
                   />
                 </div>

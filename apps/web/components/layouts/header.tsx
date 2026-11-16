@@ -8,12 +8,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@radix-ui/react-dropdown-menu";
-import { Bell, Search, LogOut, User, Moon, Sun, Menu } from "lucide-react";
+import { Bell, LogOut, User, Moon, Sun, Menu } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import React, { useEffect, useState } from "react";
+import React from "react";
 
-import { CommandPalette } from "@/components/layouts/command-palette";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/stores/auth.store";
@@ -28,19 +27,6 @@ export function Header({ onOpenMenu }: HeaderProps) {
   const { user, logout } = useAuthStore();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
-  const [searchOpen, setSearchOpen] = useState(false);
-
-  // AE-18: Ctrl/Cmd+K abre a busca de qualquer tela.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSearchOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
 
   const handleLogout = () => {
     logout();
@@ -63,20 +49,6 @@ export function Header({ onOpenMenu }: HeaderProps) {
             <Menu className="h-5 w-5" />
           </Button>
         </Tooltip>
-        {/* AE-18: era um input inerte — aceitava digitação e não fazia nada.
-            Agora é o gatilho da busca global (Ctrl/Cmd+K). */}
-        <button
-          type="button"
-          onClick={() => setSearchOpen(true)}
-          aria-label="Buscar"
-          className="relative hidden h-9 w-72 max-w-full items-center gap-2 rounded-lg border border-transparent bg-muted/50 pl-9 pr-3 text-left text-sm text-muted-foreground/70 transition-all duration-200 hover:bg-muted/70 sm:flex"
-        >
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/60" />
-          <span className="flex-1 truncate">Buscar...</span>
-          <kbd className="hidden rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] md:inline">
-            Ctrl K
-          </kbd>
-        </button>
       </div>
 
       <div className="flex items-center gap-1.5">
@@ -157,8 +129,6 @@ export function Header({ onOpenMenu }: HeaderProps) {
         </DropdownMenu>
       </div>
     </header>
-
-    <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
     </>
   );
 }

@@ -77,6 +77,10 @@ export class PaymentMethodsService {
 
   async create(tenantId: string, dto: CreatePaymentMethodDto) {
     assertImmediateHasAccount(dto.type, dto.defaultAccountId);
+    assertAnticipationRules({
+      autoSettle: dto.autoSettle,
+      defaultAccountId: dto.defaultAccountId,
+    });
 
     if (dto.defaultAccountId) {
       const account = await this.prisma.financialAccount.findFirst({
@@ -97,6 +101,7 @@ export class PaymentMethodsService {
         defaultAccountId: dto.defaultAccountId,
         feePercentage: dto.feePercentage,
         settlementDays: dto.settlementDays,
+        autoSettle: dto.autoSettle ?? false,
         requiresAuthorization: dto.requiresAuthorization ?? false,
         fiscalCode: dto.fiscalCode,
         isActive: dto.isActive ?? true,
@@ -135,6 +140,13 @@ export class PaymentMethodsService {
         : existing.defaultAccountId,
     );
 
+    // O que vale é o método como ficará depois da edição.
+    assertAnticipationRules({
+      autoSettle: dto.autoSettle !== undefined ? dto.autoSettle : existing.autoSettle,
+      defaultAccountId:
+        dto.defaultAccountId !== undefined ? dto.defaultAccountId : existing.defaultAccountId,
+    });
+
     if (dto.defaultAccountId) {
       const account = await this.prisma.financialAccount.findFirst({
         where: { id: dto.defaultAccountId, tenantId },
@@ -152,6 +164,7 @@ export class PaymentMethodsService {
     if (dto.defaultAccountId !== undefined) updateData.defaultAccountId = dto.defaultAccountId;
     if (dto.feePercentage !== undefined) updateData.feePercentage = dto.feePercentage;
     if (dto.settlementDays !== undefined) updateData.settlementDays = dto.settlementDays;
+    if (dto.autoSettle !== undefined) updateData.autoSettle = dto.autoSettle;
     if (dto.requiresAuthorization !== undefined) updateData.requiresAuthorization = dto.requiresAuthorization;
     if (dto.fiscalCode !== undefined) updateData.fiscalCode = dto.fiscalCode;
     if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
@@ -235,4 +248,18 @@ function assertImmediateHasAccount(
   throw new BadRequestException(
     'Métodos de pagamento à vista (dinheiro, PIX, débito) exigem uma conta financeira vinculada — é nela que o dinheiro entra no momento da venda.',
   );
+}
+
+/**
+ * Uma baixa automática sem conta para creditar falharia em silêncio todo dia.
+ */
+function assertAnticipationRules(method: {
+  autoSettle?: boolean | null;
+  defaultAccountId?: string | null;
+}): void {
+  if (method.autoSettle && !method.defaultAccountId) {
+    throw new BadRequestException(
+      'A baixa automática precisa de uma conta financeira vinculada — é nela que o dinheiro entra no dia.',
+    );
+  }
 }

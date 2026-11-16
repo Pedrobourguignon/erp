@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { Prisma, OrderStatus } from '@prisma/client';
@@ -20,6 +21,38 @@ import {
 } from '../../common/utils/pagination';
 import { formatDocument, onlyDigits } from '@erp/validators';
 import { sumMoney } from '../../common/utils/money.util';
+import { startOfDayInTz, toLocalDateKey } from '../../common/utils/date-range.util';
+
+/**
+ * A data de nascimento é uma data civil (o aniversário não muda com o fuso):
+ * meia-noite no fuso do lojista, como `dueDate` — nunca `new Date('1990-05-20')`,
+ * que é meia-noite UTC e mostraria o dia 19 (FN-02).
+ *
+ * `undefined` = não enviada; `null` = apagar. Recusa, e não ajusta, o que não
+ * existe, o que ainda não aconteceu e o que é antes de 1900.
+ */
+const MIN_BIRTH_DATE_KEY = '1900-01-01';
+
+function toBirthDate(value: string | null | undefined): Date | null | undefined {
+  if (value === undefined || value === null) return value;
+
+  const [year, month, day] = value.split('-').map(Number);
+  const real = new Date(Date.UTC(year, month - 1, day));
+  const exists =
+    real.getUTCFullYear() === year &&
+    real.getUTCMonth() === month - 1 &&
+    real.getUTCDate() === day;
+  if (!exists) {
+    throw new BadRequestException('Data de nascimento inválida.');
+  }
+  if (value < MIN_BIRTH_DATE_KEY) {
+    throw new BadRequestException('Informe uma data de nascimento a partir de 1900.');
+  }
+  if (value > toLocalDateKey(new Date())) {
+    throw new BadRequestException('A data de nascimento não pode ser no futuro.');
+  }
+  return startOfDayInTz(value);
+}
 
 @Injectable()
 export class CustomersService {
@@ -151,6 +184,7 @@ export class CustomersService {
     // máscara deixava `12345678909` e `123.456.789-09` conviverem como dois
     // clientes — e a duplicidade era burlável só mudando a formatação.
     const document = dto.document ? onlyDigits(dto.document) : undefined;
+    const birthDate = toBirthDate(dto.birthDate);
 
     if (document) {
       const existing = await this.prisma.customer.findFirst({
@@ -182,7 +216,8 @@ export class CustomersService {
         email: dto.email,
         phone: dto.phone,
         document,
-        documentType: dto.documentType,
+        documentType: dto.documentType ?? undefined,
+        birthDate: birthDate ?? undefined,
         tradeName: dto.tradeName,
         segment: dto.segment,
         tags: dto.tags ?? [],
@@ -218,6 +253,9 @@ export class CustomersService {
     const normalizedDocument = dto.document
       ? onlyDigits(dto.document)
       : undefined;
+    // `null` apaga; ausente deixa como está.
+    const clearsDocument = dto.document === null;
+    const birthDate = toBirthDate(dto.birthDate);
 
     if (normalizedDocument && normalizedDocument !== existing.document) {
       const docExists = await this.prisma.customer.findFirst({
@@ -258,8 +296,9 @@ export class CustomersService {
         name: dto.name,
         email: dto.email,
         phone: dto.phone,
-        document: normalizedDocument,
-        documentType: dto.documentType,
+        document: clearsDocument ? null : normalizedDocument,
+        documentType: clearsDocument ? null : dto.documentType,
+        birthDate,
         tradeName: dto.tradeName,
         segment: dto.segment,
         tags: dto.tags,

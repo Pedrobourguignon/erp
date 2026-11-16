@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { InventoryService } from '../../modules/inventory/inventory.service';
-import { settlesAtSale } from '../../common/constants/payment.constants';
+import { PAYMENT_FEE_KIND, settlesAtSale } from '../../common/constants/payment.constants';
 import { fromCents, toCents } from '../../common/utils/money.util';
 import { roundMoney, splitInstallments } from '@erp/validators';
 import {
@@ -18,8 +18,7 @@ import {
   EVENT_NAMES,
 } from '../event-types';
 
-/** Marks an AccountsPayable as the acquirer fee of a sale payment. */
-export const PAYMENT_FEE_KIND = 'PAYMENT_FEE';
+export { PAYMENT_FEE_KIND };
 
 @Injectable()
 export class OrderEventsHandler {

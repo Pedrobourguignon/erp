@@ -8,13 +8,14 @@ import {
 import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
-import { applyTransfer } from '../financial/financial-accounts.service';
+import { applyTransfer, assertCanGoNegative } from '../financial/financial-accounts.service';
 import {
   CreateCashRegisterDto,
   UpdateCashRegisterDto,
   OpenSessionDto,
   CloseSessionDto,
-  CashMovementDto,
+  SupplyDto,
+  WithdrawDto,
   CashRegisterQueryDto,
   SessionQueryDto,
 } from './dto/cash-register.dto';
@@ -31,6 +32,27 @@ import {
   toMoney,
 } from '../../common/utils/money.util';
 
+
+type CounterpartRole = 'withdraw' | 'supply' | 'opening' | 'vault';
+
+const COUNTERPART_ROLE: Record<CounterpartRole, { sameAsDrawer: string; notFound: string }> = {
+  withdraw: {
+    sameAsDrawer: 'A conta de destino da sangria deve ser diferente da conta do próprio caixa.',
+    notFound: 'Conta de destino da sangria não encontrada ou inativa.',
+  },
+  supply: {
+    sameAsDrawer: 'A conta de origem do suprimento deve ser diferente da conta do próprio caixa.',
+    notFound: 'Conta de origem do suprimento não encontrada ou inativa.',
+  },
+  opening: {
+    sameAsDrawer: 'O fundo de troco deve vir de uma conta diferente da conta do próprio caixa.',
+    notFound: 'Conta de origem do fundo de troco não encontrada ou inativa.',
+  },
+  vault: {
+    sameAsDrawer: 'O cofre deve ser uma conta diferente da conta do próprio caixa.',
+    notFound: 'Conta do cofre não encontrada ou inativa.',
+  },
+};
 
 @Injectable()
 export class CashRegistersService {
@@ -62,6 +84,7 @@ export class CashRegistersService {
         orderBy: { createdAt: 'desc' },
         include: {
           financialAccount: { select: { id: true, name: true, type: true } },
+          vaultAccount: { select: { id: true, name: true } },
           sessions: {
             where: { status: 'OPEN' },
             take: 1,
@@ -117,6 +140,10 @@ export class CashRegistersService {
       );
     }
 
+    if (dto.vaultAccountId) {
+      await this.assertCounterpartAccount(tenantId, dto.vaultAccountId, dto.financialAccountId, 'vault');
+    }
+
     // Check for duplicate name
     const existing = await this.prisma.cashRegister.findUnique({
       where: { tenantId_name: { tenantId, name: dto.name } },
@@ -133,10 +160,12 @@ export class CashRegistersService {
         tenantId,
         name: dto.name,
         financialAccountId: dto.financialAccountId,
+        vaultAccountId: dto.vaultAccountId ?? null,
         isActive: dto.isActive ?? true,
       },
       include: {
         financialAccount: { select: { id: true, name: true, type: true } },
+        vaultAccount: { select: { id: true, name: true } },
       },
     });
 
@@ -169,6 +198,18 @@ export class CashRegistersService {
       }
     }
 
+    // A gaveta e o cofre nunca podem ser a mesma conta, venha a mudança de um
+    // lado ou do outro.
+    const nextAccountId = dto.financialAccountId ?? existing.financialAccountId;
+    const nextVaultId =
+      dto.vaultAccountId !== undefined ? dto.vaultAccountId : existing.vaultAccountId;
+    if (nextVaultId && nextVaultId === nextAccountId) {
+      throw new BadRequestException(COUNTERPART_ROLE.vault.sameAsDrawer);
+    }
+    if (dto.vaultAccountId) {
+      await this.assertCounterpartAccount(tenantId, dto.vaultAccountId, nextAccountId, 'vault');
+    }
+
     if (dto.name && dto.name !== existing.name) {
       const duplicate = await this.prisma.cashRegister.findUnique({
         where: { tenantId_name: { tenantId, name: dto.name } },
@@ -185,10 +226,12 @@ export class CashRegistersService {
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.financialAccountId !== undefined && { financialAccountId: dto.financialAccountId }),
+        ...(dto.vaultAccountId !== undefined && { vaultAccountId: dto.vaultAccountId }),
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
       include: {
         financialAccount: { select: { id: true, name: true, type: true } },
+        vaultAccount: { select: { id: true, name: true } },
       },
     });
 
@@ -256,6 +299,13 @@ export class CashRegistersService {
       );
     }
 
+    // O que o fundo declarado tem a mais que a conta entrou na gaveta agora — e
+    // saiu de algum lugar (ADR 0003). Antes isso era creditado do nada.
+    const source =
+      externalSupply > 0
+        ? await this.openingSource(tenantId, cashRegister, externalSupply, dto.sourceAccountId)
+        : null;
+
     const session = await this.prisma.$transaction(async (tx) => {
       const created = await tx.cashRegisterSession.create({
         data: {
@@ -271,15 +321,19 @@ export class CashRegistersService {
         },
       });
 
-      // FN-15: só o suprimento externo é dinheiro entrando na gaveta.
-      await this.bookOnAccount(tx, {
-        tenantId,
-        accountId: cashRegister.financialAccountId,
-        direction: 'in',
-        amount: externalSupply,
-        description: `Suprimento de abertura - ${cashRegister.name}`,
-        sessionId: created.id,
-      });
+      // O fundo já entra no openingBalance da sessão: não vira movimento de
+      // suprimento, senão a gaveta contaria o mesmo dinheiro duas vezes.
+      if (source) {
+        await applyTransfer(tx, {
+          tenantId,
+          from: { id: source.id, name: source.name },
+          to: { id: cashRegister.financialAccountId, name: cashRegister.name },
+          amount: externalSupply,
+          description: `Fundo de troco da abertura ${source.name} → ${cashRegister.name}`,
+          when: new Date(),
+          transferId: randomUUID(),
+        });
+      }
 
       return created;
     });
@@ -643,11 +697,16 @@ export class CashRegistersService {
     return { sessionId: session.id };
   }
 
+  /**
+   * Suprimento: o dinheiro sai da conta de origem (cofre, banco) e entra na
+   * gaveta numa transferência. Antes só a gaveta era creditada e o dinheiro
+   * nascia do nada — o saldo total da empresa crescia sem receita nenhuma.
+   */
   async supply(
     tenantId: string,
     cashRegisterId: string,
     userId: string,
-    dto: CashMovementDto,
+    dto: SupplyDto,
   ) {
     const register = await this.loadRegister(tenantId, cashRegisterId);
     const session = await this.getOpenSession(tenantId, cashRegisterId);
@@ -656,6 +715,23 @@ export class CashRegistersService {
       throw new BadRequestException('O valor do suprimento deve ser maior que zero');
     }
 
+    const sourceId = dto.sourceAccountId ?? register.vaultAccountId;
+    if (!sourceId) {
+      throw new BadRequestException(
+        'Escolha a conta de origem do suprimento (cofre, banco): o dinheiro que entra na gaveta sai de algum lugar.',
+      );
+    }
+    const source = await this.assertCounterpartAccount(
+      tenantId,
+      sourceId,
+      register.financialAccountId,
+      'supply',
+    );
+    // Cofre não fica negativo; banco pode, porque o saldo do sistema costuma
+    // estar atrasado em relação ao extrato (mesma regra da transferência manual).
+    assertCanGoNegative(source, amount, true);
+
+    const transferId = randomUUID();
     const movement = await this.prisma.$transaction(async (tx) => {
       const created = await tx.cashRegisterMovement.create({
         data: {
@@ -665,36 +741,47 @@ export class CashRegistersService {
           amount,
           reason: dto.reason,
           performedById: userId,
+          counterpartAccountId: source.id,
+          transferId,
         },
         include: {
           performedBy: { select: { id: true, name: true } },
+          counterpartAccount: { select: { id: true, name: true } },
         },
       });
 
-      await this.bookOnAccount(tx, {
+      await applyTransfer(tx, {
         tenantId,
-        accountId: register.financialAccountId,
-        direction: 'in',
+        from: { id: source.id, name: source.name },
+        to: { id: register.financialAccountId, name: register.name },
         amount,
-        description: `Suprimento de caixa - ${dto.reason}`,
-        sessionId: session.id,
+        description: `Suprimento de caixa ${source.name} → ${register.name} - ${dto.reason}`,
+        when: new Date(),
+        transferId,
       });
 
       return created;
     });
 
     this.logger.log(
-      `Cash supply: ${dto.amount} to session ${session.id} by user ${userId}. Reason: ${dto.reason}`,
+      `Cash supply: ${amount} to session ${session.id} from account ${source.id} ` +
+        `(transfer ${transferId}) by user ${userId}, tenant ${tenantId}. Reason: ${dto.reason}`,
     );
 
     return movement;
   }
 
+  /**
+   * Sangria: o dinheiro sai da gaveta e entra na conta de destino (cofre,
+   * tesouraria, banco) numa transferência. Antes só a gaveta era debitada e o
+   * dinheiro sumia do patrimônio. Pagar despesa com dinheiro da gaveta não é
+   * sangria — é título + baixa pela conta do caixa (mirrorSettlementInDrawer).
+   */
   async withdraw(
     tenantId: string,
     cashRegisterId: string,
     userId: string,
-    dto: CashMovementDto,
+    dto: WithdrawDto,
   ) {
     const register = await this.loadRegister(tenantId, cashRegisterId);
     const session = await this.getOpenSession(tenantId, cashRegisterId);
@@ -702,6 +789,20 @@ export class CashRegistersService {
     if (amount <= 0) {
       throw new BadRequestException('O valor da sangria deve ser maior que zero');
     }
+
+    const destinationId = dto.destinationAccountId ?? register.vaultAccountId;
+    if (!destinationId) {
+      throw new BadRequestException(
+        'Escolha a conta de destino da sangria (cofre, tesouraria, banco). ' +
+          'Se o dinheiro foi usado para pagar algo, lance como despesa e dê baixa pela conta do caixa.',
+      );
+    }
+    const destination = await this.assertCounterpartAccount(
+      tenantId,
+      destinationId,
+      register.financialAccountId,
+      'withdraw',
+    );
 
     // FN-06: a drawer cannot hold negative cash.
     const available = await this.availableBalance(tenantId, session);
@@ -711,6 +812,7 @@ export class CashRegistersService {
       );
     }
 
+    const transferId = randomUUID();
     const movement = await this.prisma.$transaction(async (tx) => {
       const created = await tx.cashRegisterMovement.create({
         data: {
@@ -720,29 +822,82 @@ export class CashRegistersService {
           amount,
           reason: dto.reason,
           performedById: userId,
+          counterpartAccountId: destination.id,
+          transferId,
         },
         include: {
           performedBy: { select: { id: true, name: true } },
+          counterpartAccount: { select: { id: true, name: true } },
         },
       });
 
-      await this.bookOnAccount(tx, {
+      await applyTransfer(tx, {
         tenantId,
-        accountId: register.financialAccountId,
-        direction: 'out',
+        from: { id: register.financialAccountId, name: register.name },
+        to: { id: destination.id, name: destination.name },
         amount,
-        description: `Sangria de caixa - ${dto.reason}`,
-        sessionId: session.id,
+        description: `Sangria de caixa ${register.name} → ${destination.name} - ${dto.reason}`,
+        when: new Date(),
+        transferId,
       });
 
       return created;
     });
 
     this.logger.log(
-      `Cash withdrawal: ${dto.amount} from session ${session.id} by user ${userId}. Reason: ${dto.reason}`,
+      `Cash withdrawal: ${amount} from session ${session.id} to account ${destination.id} ` +
+        `(transfer ${transferId}) by user ${userId}, tenant ${tenantId}. Reason: ${dto.reason}`,
     );
 
     return movement;
+  }
+
+  /** A conta de onde sai o fundo de troco que falta na abertura. */
+  private async openingSource(
+    tenantId: string,
+    cashRegister: { name: string; financialAccountId: string; vaultAccountId: string | null },
+    missing: number,
+    requested?: string,
+  ): Promise<{ id: string; name: string }> {
+    const sourceId = requested ?? cashRegister.vaultAccountId;
+    if (!sourceId) {
+      throw new BadRequestException(
+        `O fundo declarado tem ${formatBRL(missing)} a mais do que a conta do caixa "${cashRegister.name}". ` +
+          'Escolha a conta de origem desse dinheiro (cofre, banco) ou configure o cofre do caixa.',
+      );
+    }
+    const source = await this.assertCounterpartAccount(
+      tenantId,
+      sourceId,
+      cashRegister.financialAccountId,
+      'opening',
+    );
+    assertCanGoNegative(source, missing, true);
+    return source;
+  }
+
+  /**
+   * A conta do outro lado de uma transferência com a gaveta (destino da
+   * sangria, origem do suprimento, cofre do caixa): da empresa do token, ativa,
+   * não excluída e diferente da própria gaveta.
+   */
+  private async assertCounterpartAccount(
+    tenantId: string,
+    accountId: string,
+    drawerAccountId: string,
+    role: CounterpartRole,
+  ): Promise<{ id: string; name: string; type: string; balance: Prisma.Decimal | number }> {
+    if (accountId === drawerAccountId) {
+      throw new BadRequestException(COUNTERPART_ROLE[role].sameAsDrawer);
+    }
+    const account = await this.prisma.financialAccount.findFirst({
+      where: { id: accountId, tenantId, isActive: true, deletedAt: null },
+      select: { id: true, name: true, type: true, balance: true },
+    });
+    if (!account) {
+      throw new NotFoundException(COUNTERPART_ROLE[role].notFound);
+    }
+    return account;
   }
 
   async getCurrentSession(tenantId: string, cashRegisterId: string) {
@@ -765,6 +920,7 @@ export class CashRegistersService {
           orderBy: { createdAt: 'desc' },
           include: {
             performedBy: { select: { id: true, name: true } },
+            counterpartAccount: { select: { id: true, name: true } },
           },
         },
       },
@@ -856,6 +1012,7 @@ export class CashRegistersService {
           orderBy: { createdAt: 'asc' },
           include: {
             performedBy: { select: { id: true, name: true } },
+            counterpartAccount: { select: { id: true, name: true } },
           },
         },
       },

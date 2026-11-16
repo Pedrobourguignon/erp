@@ -18,6 +18,10 @@ import {
   useCashRegisterSession,
   useCashRegisterSessions,
   useCloseCashRegister,
+  useCashWithdraw,
+  useCashSupply,
+  useOpenCashRegister,
+  useUpdateCashRegister,
   cashRegisterKeys,
 } from './use-cash-registers';
 
@@ -152,5 +156,131 @@ describe('cash register mutations invalidate the session history', () => {
     // Invalidating only `lists()` left `sessionList(params)` untouched: the
     // operator closed the register and the table still read "Aberto".
     expect(spy).toHaveBeenCalledWith({ queryKey: cashRegisterKeys.all });
+  });
+});
+
+describe('useCashWithdraw — sangria vai para uma conta', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('envia a conta de destino junto com valor e motivo', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const { result } = renderHook(() => useCashWithdraw(), { wrapper: createWrapper() });
+
+    await result.current.mutateAsync({
+      id: 'reg-1',
+      amount: 500,
+      reason: 'Excesso na gaveta',
+      destinationAccountId: 'acc-cofre',
+    });
+
+    expect(mockedApi.post).toHaveBeenCalledWith('/cash-registers/reg-1/withdraw', {
+      amount: 500,
+      reason: 'Excesso na gaveta',
+      destinationAccountId: 'acc-cofre',
+    });
+  });
+
+  it('invalida o saldo das contas financeiras: o destino acabou de receber dinheiro', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useCashWithdraw(), { wrapper });
+    await result.current.mutateAsync({
+      id: 'reg-1',
+      amount: 500,
+      reason: 'Sangria',
+      destinationAccountId: 'acc-cofre',
+    });
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: cashRegisterKeys.all });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['financial-accounts'] });
+  });
+});
+
+describe('useCashSupply — suprimento vem de uma conta', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('envia a conta de origem junto com valor e motivo', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const { result } = renderHook(() => useCashSupply(), { wrapper: createWrapper() });
+
+    await result.current.mutateAsync({
+      id: 'reg-1',
+      amount: 200,
+      reason: 'Troco',
+      sourceAccountId: 'acc-cofre',
+    });
+
+    expect(mockedApi.post).toHaveBeenCalledWith('/cash-registers/reg-1/supply', {
+      amount: 200,
+      reason: 'Troco',
+      sourceAccountId: 'acc-cofre',
+    });
+  });
+
+  it('invalida o saldo das contas financeiras: a origem acabou de perder dinheiro', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useCashSupply(), { wrapper });
+    await result.current.mutateAsync({ id: 'reg-1', amount: 200, reason: 'Troco', sourceAccountId: 'acc-cofre' });
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['financial-accounts'] });
+  });
+});
+
+describe('useOpenCashRegister — o fundo que falta vem de uma conta', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('envia a conta de origem do fundo de troco', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const { result } = renderHook(() => useOpenCashRegister(), { wrapper: createWrapper() });
+
+    await result.current.mutateAsync({ id: 'reg-1', openingBalance: 120, sourceAccountId: 'acc-cofre' });
+
+    expect(mockedApi.post).toHaveBeenCalledWith('/cash-registers/reg-1/open', {
+      openingBalance: 120,
+      sourceAccountId: 'acc-cofre',
+    });
+  });
+
+  it('invalida o saldo das contas: o cofre pode ter acabado de perder dinheiro', async () => {
+    mockedApi.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useOpenCashRegister(), { wrapper });
+    await result.current.mutateAsync({ id: 'reg-1', openingBalance: 120 });
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['financial-accounts'] });
+  });
+});
+
+describe('useUpdateCashRegister', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('grava o cofre do caixa', async () => {
+    mockedApi.patch.mockResolvedValueOnce({ data: { success: true, data: {} } });
+    const { result } = renderHook(() => useUpdateCashRegister(), { wrapper: createWrapper() });
+
+    await result.current.mutateAsync({ id: 'reg-1', vaultAccountId: 'acc-cofre' });
+
+    expect(mockedApi.patch).toHaveBeenCalledWith('/cash-registers/reg-1', {
+      vaultAccountId: 'acc-cofre',
+    });
   });
 });

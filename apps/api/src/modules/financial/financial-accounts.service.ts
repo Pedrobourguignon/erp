@@ -449,7 +449,7 @@ export async function applyTransfer(
  * sem um aviso sequer. Dinheiro físico não fica negativo; conta bancária fica,
  * mas nunca por acidente.
  */
-function assertCanGoNegative(
+export function assertCanGoNegative(
   account: { name: string; type: string; balance: Prisma.Decimal | number },
   amount: number,
   allowed?: boolean,

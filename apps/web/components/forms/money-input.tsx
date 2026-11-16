@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useId, useRef } from "react";
 import {
   useController,
   type Control,
@@ -105,10 +105,11 @@ export function MoneyInput<TFieldValues extends FieldValues>({
   );
 
   const errorMessage = error ?? fieldError?.message;
+  const inputId = useId();
 
   return (
     <div className={cn("space-y-1", className)}>
-      {label ? <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+      {label ? <label htmlFor={inputId} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
           {label}
         </label> : null}
       <div className="relative">
@@ -116,6 +117,7 @@ export function MoneyInput<TFieldValues extends FieldValues>({
           R$
         </span>
         <input
+          id={inputId}
           type="text"
           inputMode="numeric"
           ref={(el) => {

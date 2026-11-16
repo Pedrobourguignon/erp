@@ -34,6 +34,8 @@ export interface PaymentMethod {
   defaultAccount?: { id: string; name: string; type: string } | null;
   feePercentage: number;
   settlementDays: number;
+  /** Baixa os títulos desta forma sozinho, no dia da liquidação. */
+  autoSettle: boolean;
   requiresAuthorization: boolean;
   fiscalCode: string | null;
   isActive: boolean;
@@ -89,6 +91,7 @@ export interface CreatePaymentMethodPayload {
   defaultAccountId?: string;
   feePercentage?: number;
   settlementDays?: number;
+  autoSettle?: boolean;
   requiresAuthorization?: boolean;
   fiscalCode?: string;
   isActive?: boolean;

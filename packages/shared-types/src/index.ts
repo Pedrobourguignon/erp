@@ -208,8 +208,10 @@ export interface OrderStatusHistoryEntry {
 export interface Customer {
   id: string;
   name: string;
-  email: string;
-  document: string;
+  /** Opcional: a API devolve `null` quando não foi informado. */
+  email: string | null;
+  /** Opcional: a API devolve `null` quando não foi informado. */
+  document: string | null;
 
   /**
    * Totais agregados pela API (AE-13).

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CashRegistersService } from './cash-registers.service';
 import { PrismaService } from '../../database/prisma/prisma.service';
 
@@ -21,8 +21,11 @@ function createMockPrisma() {
     tx,
     cashRegister: {
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
+      create: jest.fn(),
+      update: jest.fn(),
     },
     // A conta vinculada é a gaveta: a abertura compara o declarado com o que
     // ela já acusa, e o fechamento transfere o excedente para outra conta.
@@ -49,6 +52,11 @@ function createMockPrisma() {
     },
     $transaction: jest.fn(async (cb: (t: typeof tx) => unknown) => cb(tx)),
   };
+}
+
+/** O `data` de cada chamada a um mock do Prisma, tipado para as asserções. */
+function allCallData(mock: jest.Mock): Record<string, unknown>[] {
+  return (mock.mock.calls as [{ data: Record<string, unknown> }][]).map(([arg]) => arg.data);
 }
 
 describe('CashRegistersService', () => {
@@ -83,8 +91,10 @@ describe('CashRegistersService', () => {
         id: REGISTER_ID,
         name: 'Caixa 01',
         financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
         isActive: true,
       });
+      prisma.financialAccount.findFirst.mockResolvedValue({ id: 'acc-cofre', name: 'Cofre' });
       prisma.cashRegisterSession.findFirst.mockResolvedValue({
         id: SESSION_ID,
         openingBalance: 100,
@@ -168,9 +178,17 @@ describe('CashRegistersService', () => {
     });
 
     it('credits the account when the drawer receives a supply', async () => {
+      prisma.financialAccount.findFirst.mockResolvedValue({
+        id: 'acc-cofre',
+        name: 'Cofre',
+        type: 'CASH',
+        balance: 1000,
+      });
+
       await service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
         amount: 200,
         reason: 'Troco',
+        sourceAccountId: 'acc-cofre',
       });
 
       expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
@@ -178,15 +196,12 @@ describe('CashRegistersService', () => {
         data: { balance: { increment: 200 } },
         select: { balance: true },
       });
-      const trx = prisma.tx.financialTransaction.create.mock.calls[0][0].data;
-      expect(trx).toMatchObject({
-        type: 'CREDIT',
-        amount: 200,
-        referenceType: 'cash-register',
-      });
+      const credit = allCallData(prisma.tx.financialTransaction.create).find((t) => t.type === 'CREDIT');
+      expect(credit).toMatchObject({ accountId: 'acc-1', amount: 200, referenceType: 'transfer' });
     });
 
     it('debits the account when money leaves the drawer', async () => {
+      prisma.financialAccount.findFirst.mockResolvedValue({ id: 'acc-cofre', name: 'Cofre' });
       prisma.cashRegisterSession.findFirst.mockResolvedValue({
         id: SESSION_ID,
         openingBalance: 500,
@@ -196,6 +211,7 @@ describe('CashRegistersService', () => {
       await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
         amount: 200,
         reason: 'Sangria',
+        destinationAccountId: 'acc-cofre',
       });
 
       expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
@@ -209,9 +225,17 @@ describe('CashRegistersService', () => {
 
     it('books the opening float when the session opens', async () => {
       prisma.cashRegisterSession.findFirst.mockResolvedValue(null);
+      prisma.financialAccount.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          where.id === 'acc-cofre'
+            ? { id: 'acc-cofre', name: 'Cofre', type: 'CASH', balance: 500 }
+            : { id: 'acc-1', name: 'Caixa 01', balance: 0 },
+        ),
+      );
 
       await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
         openingBalance: 100,
+        sourceAccountId: 'acc-cofre',
       });
 
       expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
@@ -266,19 +290,6 @@ describe('CashRegistersService', () => {
       expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
     });
 
-    it('does not fail when the register has no linked account', async () => {
-      prisma.cashRegister.findFirst.mockResolvedValue({
-        id: REGISTER_ID,
-        name: 'Caixa sem conta',
-        financialAccountId: null,
-        isActive: true,
-      });
-
-      await expect(
-        service.supply(TENANT_ID, REGISTER_ID, USER_ID, { amount: 50, reason: 'x' }),
-      ).resolves.toBeDefined();
-      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
-    });
   });
 
   // ─── A tela do caixa e o fechamento têm que contar a mesma coisa ─────────
@@ -547,70 +558,541 @@ describe('CashRegistersService', () => {
 
   // ─── Abrir caixa não cria dinheiro ──────────────────────────────────────
 
-  describe('openSession — crédito só do que entra de fora', () => {
-    // O fundo de troco que dormiu na gaveta já está na conta. Creditar a
-    // abertura inteira todo dia inventava R$ 50,00 por dia de dinheiro que
-    // ninguém colocou lá.
+  describe('openSession — o fundo de troco que falta vem do cofre', () => {
+    // O fundo de troco que dormiu na gaveta já está na conta: não se credita de
+    // novo. O que o operador declara acima disso é dinheiro que entrou na gaveta
+    // — e ele saiu de algum lugar. Antes a abertura creditava essa diferença do
+    // nada, o mesmo erro que o suprimento cometia.
+    const cofre = { id: 'acc-cofre', name: 'Cofre', type: 'CASH', balance: 500 };
+    const banco = { id: 'acc-banco', name: 'Santander', type: 'CHECKING', balance: 0 };
+    let drawerBalance = 50;
+
     beforeEach(() => {
+      drawerBalance = 50;
       prisma.cashRegister.findFirst.mockResolvedValue({
         id: REGISTER_ID,
         name: 'Caixa 01',
         financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
         isActive: true,
       });
       prisma.cashRegisterSession.findFirst.mockResolvedValue(null);
       prisma.tx.cashRegisterSession.create.mockResolvedValue({ id: SESSION_ID });
+      prisma.financialAccount.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          where.id === 'acc-1'
+            ? { id: 'acc-1', name: 'Caixa 01', balance: drawerBalance }
+            : ([cofre, banco].find((a) => a.id === where.id) ?? null),
+        ),
+      );
     });
 
-    it('não credita nada quando o fundo declarado já está na conta', async () => {
-      prisma.financialAccount.findFirst.mockResolvedValue({
-        id: 'acc-1',
-        name: 'Caixa 01',
-        balance: 50,
-      });
-
-      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
-        openingBalance: 50,
-      });
+    it('não move nada quando o fundo declarado já está na conta', async () => {
+      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 50 });
 
       expect(prisma.tx.financialAccount.update).not.toHaveBeenCalled();
     });
 
-    it('credita só o suprimento externo quando entra dinheiro de fora', async () => {
-      prisma.financialAccount.findFirst.mockResolvedValue({
-        id: 'acc-1',
+    it('não exige cofre quando nada precisa entrar na gaveta', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
         name: 'Caixa 01',
-        balance: 50,
+        financialAccountId: 'acc-1',
+        vaultAccountId: null,
+        isActive: true,
       });
 
-      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
-        openingBalance: 120,
-      });
+      await expect(
+        service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 50 }),
+      ).resolves.toBeDefined();
+    });
 
+    it('traz do cofre só o que falta para o fundo declarado', async () => {
+      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 120 });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-cofre' },
+        data: { balance: { decrement: 70 } },
+        select: { balance: true },
+      });
       expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
         where: { id: 'acc-1' },
         data: { balance: { increment: 70 } },
         select: { balance: true },
       });
+      expect(allCallData(prisma.tx.financialTransaction.create)).toEqual([
+        expect.objectContaining({ accountId: 'acc-cofre', type: 'DEBIT', amount: 70, referenceType: 'transfer' }),
+        expect.objectContaining({ accountId: 'acc-1', type: 'CREDIT', amount: 70, referenceType: 'transfer' }),
+      ]);
+    });
+
+    it('a conta escolhida na abertura vale mais que o cofre do caixa', async () => {
+      await service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
+        openingBalance: 120,
+        sourceAccountId: 'acc-banco',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-banco' }, data: { balance: { decrement: 70 } } }),
+      );
+      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-cofre' } }),
+      );
+    });
+
+    it('recusa abrir com dinheiro a mais sem dizer de onde ele vem', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: null,
+        isActive: true,
+      });
+
+      const attempt = service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 120 });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/R\$\s70,00/);
+      await expect(attempt).rejects.toThrow(/conta de origem/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('recusa tirar do cofre mais do que ele tem', async () => {
+      const attempt = service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 600 });
+
+      await expect(attempt).rejects.toThrow(/Saldo insuficiente em "Cofre"/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('recusa usar a própria gaveta como origem do fundo', async () => {
+      await expect(
+        service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
+          openingBalance: 120,
+          sourceAccountId: 'acc-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('recusa abrir com menos do que a conta acusa — dinheiro saiu sem registro', async () => {
-      prisma.financialAccount.findFirst.mockResolvedValue({
-        id: 'acc-1',
-        name: 'Caixa 01',
-        balance: 399.9,
-      });
+      drawerBalance = 399.9;
 
       await expect(
-        service.openSession(TENANT_ID, REGISTER_ID, USER_ID, {
-          openingBalance: 50,
-        }),
+        service.openSession(TENANT_ID, REGISTER_ID, USER_ID, { openingBalance: 50 }),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
   // ─── Fechamento leva o dinheiro do dia para o destino ───────────────────
+
+  // ─── Sangria é transferência: o dinheiro muda de lugar, não some ─────────
+
+  describe('withdraw — sangria transfere para a conta de destino', () => {
+    // A sangria só debitava a conta da gaveta. Os R$ 500 levados ao cofre
+    // saíam do caixa e não entravam em lugar nenhum: o patrimônio da empresa
+    // caía sem despesa que explicasse, e um sumiço entre a gaveta e o cofre
+    // não aparecia em conferência nenhuma.
+    const cofre = { id: 'acc-cofre', name: 'Cofre' };
+    const banco = { id: 'acc-banco', name: 'Santander' };
+
+    beforeEach(() => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: null,
+        isActive: true,
+      });
+      prisma.cashRegisterSession.findFirst.mockResolvedValue({
+        id: SESSION_ID,
+        openingBalance: 1000,
+        movements: [],
+      });
+      prisma.orderPayment.aggregate.mockResolvedValue({ _sum: { amount: 0 } });
+      prisma.financialAccount.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve([cofre, banco].find((a) => a.id === where.id) ?? null),
+      );
+    });
+
+    it('debita a gaveta e credita a conta de destino', async () => {
+      await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 500,
+        reason: 'Excesso na gaveta',
+        destinationAccountId: 'acc-cofre',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-1' },
+        data: { balance: { decrement: 500 } },
+        select: { balance: true },
+      });
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-cofre' },
+        data: { balance: { increment: 500 } },
+        select: { balance: true },
+      });
+      const trxs = allCallData(prisma.tx.financialTransaction.create);
+      expect(trxs).toEqual([
+        expect.objectContaining({ accountId: 'acc-1', type: 'DEBIT', amount: 500, referenceType: 'transfer' }),
+        expect.objectContaining({ accountId: 'acc-cofre', type: 'CREDIT', amount: 500, referenceType: 'transfer' }),
+      ]);
+    });
+
+    it('grava no movimento da gaveta para onde o dinheiro foi e qual transferência o levou', async () => {
+      await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 500,
+        reason: 'Excesso na gaveta',
+        destinationAccountId: 'acc-cofre',
+      });
+
+      const movement = allCallData(prisma.tx.cashRegisterMovement.create)[0];
+      const debit = allCallData(prisma.tx.financialTransaction.create)[0];
+      expect(movement).toMatchObject({
+        type: 'WITHDRAW',
+        amount: 500,
+        counterpartAccountId: 'acc-cofre',
+        transferId: debit.referenceId,
+      });
+      expect(movement.transferId).toEqual(expect.any(String));
+    });
+
+    it('usa a conta padrão do caixa quando o operador não escolhe outra', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+        isActive: true,
+      });
+
+      await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, { amount: 100, reason: 'Sangria' });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-cofre' }, data: { balance: { increment: 100 } } }),
+      );
+    });
+
+    it('a conta escolhida na sangria vale mais que a padrão do caixa', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+        isActive: true,
+      });
+
+      await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 100,
+        reason: 'Depósito direto',
+        destinationAccountId: 'acc-banco',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-banco' }, data: { balance: { increment: 100 } } }),
+      );
+      expect(prisma.tx.financialAccount.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-cofre' } }),
+      );
+    });
+
+    it('recusa sangria sem destino e aponta o caminho da despesa', async () => {
+      const attempt = service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 100,
+        reason: 'Motoboy',
+      });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/conta de destino/);
+      await expect(attempt).rejects.toThrow(/despesa/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('recusa mandar a sangria para a conta do próprio caixa', async () => {
+      await expect(
+        service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+          amount: 100,
+          reason: 'Sangria',
+          destinationAccountId: 'acc-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('procura a conta de destino só na empresa do token, ativa e não excluída', async () => {
+      await service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 100,
+        reason: 'Sangria',
+        destinationAccountId: 'acc-cofre',
+      });
+
+      expect(prisma.financialAccount.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'acc-cofre', tenantId: TENANT_ID, isActive: true, deletedAt: null },
+        }),
+      );
+    });
+
+    it('recusa conta de destino de outra empresa, inativa ou excluída', async () => {
+      await expect(
+        service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+          amount: 100,
+          reason: 'Sangria',
+          destinationAccountId: 'acc-de-outra-empresa',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('não move dinheiro nenhum quando falta saldo na gaveta', async () => {
+      await expect(
+        service.withdraw(TENANT_ID, REGISTER_ID, USER_ID, {
+          amount: 1000.01,
+          reason: 'Sangria',
+          destinationAccountId: 'acc-cofre',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Conta padrão da sangria no cadastro do caixa ─────────────────────────
+
+  describe('conta padrão da sangria (create/update)', () => {
+    const cofre = { id: 'acc-cofre', name: 'Cofre' };
+    const gaveta = { id: 'acc-1', name: 'Caixa 01' };
+
+    beforeEach(() => {
+      prisma.financialAccount.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve([cofre, gaveta].find((a) => a.id === where.id) ?? null),
+      );
+      prisma.cashRegister.findUnique.mockResolvedValue(null);
+      prisma.cashRegister.create.mockImplementation(({ data }: { data: unknown }) => Promise.resolve(data));
+      prisma.cashRegister.update.mockImplementation(({ data }: { data: unknown }) => Promise.resolve(data));
+    });
+
+    it('cadastra o caixa já com a conta padrão da sangria', async () => {
+      await service.create(TENANT_ID, {
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+      });
+
+      expect(allCallData(prisma.cashRegister.create)[0]).toMatchObject({
+        vaultAccountId: 'acc-cofre',
+      });
+    });
+
+    it('recusa a conta do próprio caixa como destino padrão', async () => {
+      await expect(
+        service.create(TENANT_ID, {
+          name: 'Caixa 01',
+          financialAccountId: 'acc-1',
+          vaultAccountId: 'acc-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.cashRegister.create).not.toHaveBeenCalled();
+    });
+
+    it('recusa conta padrão que não é da empresa', async () => {
+      await expect(
+        service.create(TENANT_ID, {
+          name: 'Caixa 01',
+          financialAccountId: 'acc-1',
+          vaultAccountId: 'acc-de-outra-empresa',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('troca a conta padrão de um caixa existente', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: null,
+      });
+
+      await service.update(TENANT_ID, REGISTER_ID, { vaultAccountId: 'acc-cofre' });
+
+      expect(allCallData(prisma.cashRegister.update)[0]).toMatchObject({
+        vaultAccountId: 'acc-cofre',
+      });
+    });
+
+    it('remove a conta padrão quando recebe null', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+      });
+
+      await service.update(TENANT_ID, REGISTER_ID, { vaultAccountId: null });
+
+      expect(allCallData(prisma.cashRegister.update)[0]).toMatchObject({
+        vaultAccountId: null,
+      });
+    });
+
+    it('recusa trocar a conta do caixa para a que já é o destino da sangria', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+      });
+
+      await expect(
+        service.update(TENANT_ID, REGISTER_ID, { financialAccountId: 'acc-cofre' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── Suprimento é transferência: o dinheiro vem de algum lugar ───────────
+
+  describe('supply — suprimento transfere da conta de origem', () => {
+    // O suprimento só creditava a gaveta: os R$ 200 de troco "nasciam" no
+    // caixa, o saldo total da empresa crescia sem receita que explicasse e o
+    // cofre de onde o dinheiro saiu continuava acusando o valor antigo.
+    const cofre = { id: 'acc-cofre', name: 'Cofre', type: 'CASH', balance: 300 };
+    const banco = { id: 'acc-banco', name: 'Santander', type: 'CHECKING', balance: 50 };
+
+    beforeEach(() => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: null,
+        isActive: true,
+      });
+      prisma.cashRegisterSession.findFirst.mockResolvedValue({
+        id: SESSION_ID,
+        openingBalance: 100,
+        movements: [],
+      });
+      prisma.orderPayment.aggregate.mockResolvedValue({ _sum: { amount: 0 } });
+      prisma.financialAccount.findFirst.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve([cofre, banco].find((a) => a.id === where.id) ?? null),
+      );
+    });
+
+    it('debita a conta de origem e credita a gaveta', async () => {
+      await service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 200,
+        reason: 'Troco',
+        sourceAccountId: 'acc-cofre',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-cofre' },
+        data: { balance: { decrement: 200 } },
+        select: { balance: true },
+      });
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith({
+        where: { id: 'acc-1' },
+        data: { balance: { increment: 200 } },
+        select: { balance: true },
+      });
+      expect(allCallData(prisma.tx.financialTransaction.create)).toEqual([
+        expect.objectContaining({ accountId: 'acc-cofre', type: 'DEBIT', amount: 200, referenceType: 'transfer' }),
+        expect.objectContaining({ accountId: 'acc-1', type: 'CREDIT', amount: 200, referenceType: 'transfer' }),
+      ]);
+    });
+
+    it('grava no movimento de onde o dinheiro veio e qual transferência o trouxe', async () => {
+      await service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 200,
+        reason: 'Troco',
+        sourceAccountId: 'acc-cofre',
+      });
+
+      const movement = allCallData(prisma.tx.cashRegisterMovement.create)[0];
+      const debit = allCallData(prisma.tx.financialTransaction.create)[0];
+      expect(movement).toMatchObject({
+        type: 'SUPPLY',
+        amount: 200,
+        counterpartAccountId: 'acc-cofre',
+        transferId: debit.referenceId,
+      });
+      expect(movement.transferId).toEqual(expect.any(String));
+    });
+
+    it('usa o cofre do caixa quando o operador não escolhe outra conta', async () => {
+      prisma.cashRegister.findFirst.mockResolvedValue({
+        id: REGISTER_ID,
+        name: 'Caixa 01',
+        financialAccountId: 'acc-1',
+        vaultAccountId: 'acc-cofre',
+        isActive: true,
+      });
+
+      await service.supply(TENANT_ID, REGISTER_ID, USER_ID, { amount: 100, reason: 'Troco' });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-cofre' }, data: { balance: { decrement: 100 } } }),
+      );
+    });
+
+    it('recusa suprimento sem conta de origem', async () => {
+      const attempt = service.supply(TENANT_ID, REGISTER_ID, USER_ID, { amount: 100, reason: 'Troco' });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/conta de origem/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('recusa trazer o suprimento da conta do próprio caixa', async () => {
+      await expect(
+        service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+          amount: 100,
+          reason: 'Troco',
+          sourceAccountId: 'acc-1',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('recusa conta de origem de outra empresa, inativa ou excluída', async () => {
+      await expect(
+        service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+          amount: 100,
+          reason: 'Troco',
+          sourceAccountId: 'acc-de-outra-empresa',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.financialAccount.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'acc-de-outra-empresa', tenantId: TENANT_ID, isActive: true, deletedAt: null },
+        }),
+      );
+    });
+
+    it('recusa tirar do cofre mais do que ele tem: conta do tipo Caixa não fica negativa', async () => {
+      const attempt = service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 300.01,
+        reason: 'Troco',
+        sourceAccountId: 'acc-cofre',
+      });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/Saldo insuficiente em "Cofre"/);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('aceita suprimento de conta bancária mesmo com o saldo do sistema menor', async () => {
+      // O saque no banco é real; o saldo do banco no ERP costuma estar atrasado
+      // em relação ao extrato até a conciliação.
+      await service.supply(TENANT_ID, REGISTER_ID, USER_ID, {
+        amount: 80,
+        reason: 'Saque para troco',
+        sourceAccountId: 'acc-banco',
+      });
+
+      expect(prisma.tx.financialAccount.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'acc-banco' }, data: { balance: { decrement: 80 } } }),
+      );
+    });
+  });
 
   describe('closeSession — transferência do excedente', () => {
     beforeEach(() => {

@@ -140,6 +140,48 @@ describe('PaymentMethodsService — linked account (VD-11)', () => {
     });
   });
 
+  // Baixa automática no dia em que a operadora paga.
+  describe('auto-settle', () => {
+    const credit = { name: 'Cartão de Crédito', type: 'CREDIT_CARD' };
+
+    it('saves the auto-settle flag', async () => {
+      await service.create(TENANT, {
+        ...credit,
+        defaultAccountId: 'acc-1',
+        autoSettle: true,
+      } as never);
+
+      expect(prisma.paymentMethod.create.mock.calls[0][0].data).toMatchObject({
+        autoSettle: true,
+      });
+    });
+
+    it('defaults to no auto-settle', async () => {
+      await service.create(TENANT, credit as never);
+
+      expect(prisma.paymentMethod.create.mock.calls[0][0].data.autoSettle).toBe(false);
+    });
+
+    it('refuses auto-settle with no account to credit, in Portuguese', async () => {
+      await expect(
+        service.create(TENANT, { ...credit, autoSettle: true } as never),
+      ).rejects.toThrow('A baixa automática precisa de uma conta financeira vinculada');
+    });
+
+    it('judges an edit by the resulting method, not only by what was sent', async () => {
+      prisma.paymentMethod.findFirst.mockResolvedValue({
+        id: 'pm-1',
+        type: 'CREDIT_CARD',
+        defaultAccountId: null,
+      });
+
+      // ligar a baixa automática num método que não tem conta
+      await expect(
+        service.update(TENANT, 'pm-1', { autoSettle: true } as never),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('remove', () => {
     beforeEach(() => {
       prisma.paymentMethod.findFirst.mockResolvedValue({ id: 'pm-1', name: 'Dinheiro' });

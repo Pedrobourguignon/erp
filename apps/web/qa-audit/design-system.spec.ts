@@ -1043,7 +1043,6 @@ test("DS-a11y-focus: anel de foco real (outline computado) nos controles da shel
     { name: "sidebar/link Dashboard", selector: 'aside a[href="/"]' },
     { name: "sidebar/grupo Estoque", selector: "aside button:has-text('Estoque')" },
     { name: "sidebar/filho Produtos", selector: 'aside a[href="/estoque/produtos"]' },
-    { name: "header/busca", selector: 'header button[aria-label="Buscar"]' },
     { name: "header/tema", selector: "header button:nth-of-type(1)" },
     { name: "breadcrumb", selector: "nav[aria-label='Trilha de navegação'] a" },
     { name: "ui/Button primário", selector: "main button.bg-primary" },
@@ -1217,67 +1216,6 @@ test("DS-a11y-dialog: foco preso no dialog e devolvido ao fechar", async ({ page
   dump("a11y-dialog", results);
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(results, null, 1));
-});
-
-test("DS-a11y-palette: paleta de comandos só pelo teclado", async ({ page }) => {
-  test.setTimeout(200_000);
-  await authenticate(page);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await settle(page, "/estoque/produtos");
-
-  await page.locator("body").click({ position: { x: 400, y: 400 } });
-  await page.keyboard.press("Control+k");
-  await page.waitForTimeout(800);
-  let opened = await page.locator('[role="dialog"][aria-label="Busca global"]').count();
-  if (!opened) {
-    // fallback: o gatilho visível do topo
-    await page.locator('header button[aria-label="Buscar"]').click();
-    await page.waitForTimeout(800);
-    opened = await page.locator('[role="dialog"][aria-label="Busca global"]').count();
-  }
-  const focused = await page.evaluate(() => (document.activeElement as HTMLElement)?.tagName.toLowerCase());
-
-  await page.keyboard.type("a");
-  await page.waitForTimeout(1200);
-  const tooShort = await page.locator("text=/Digite ao menos/").count();
-  await page.keyboard.type("dm");
-  await page.waitForTimeout(1600);
-
-  const beforeTab = await page.evaluate(() => (document.activeElement as HTMLElement)?.tagName.toLowerCase());
-  await page.keyboard.press("Tab");
-  const afterTab = await page.evaluate(() => {
-    const el = document.activeElement as HTMLElement | null;
-    return el ? `${el.closest('[aria-label="Busca global"]') ? "DENTRO" : "FORA"}:${el.tagName.toLowerCase()}:${(el.textContent || "").trim().slice(0, 20)}` : "—";
-  });
-
-  const semantics = await page.evaluate(() => {
-    const d = document.querySelector('[aria-label="Busca global"]');
-    if (!d) return null;
-    const input = d.querySelector("input");
-    return {
-      ariaModal: d.getAttribute("aria-modal"),
-      inputRole: input?.getAttribute("role") ?? null,
-      ariaActivedescendant: input?.getAttribute("aria-activedescendant") ?? null,
-      ariaExpanded: input?.getAttribute("aria-expanded") ?? null,
-      ariaControls: input?.getAttribute("aria-controls") ?? null,
-      listboxRole: d.querySelector('[role="listbox"]') ? "listbox" : null,
-      optionRoles: d.querySelectorAll('[role="option"]').length,
-      resultButtons: d.querySelectorAll("button").length,
-      liveRegion: !!d.querySelector("[aria-live]"),
-    };
-  });
-  await page.screenshot({ path: shot("command-palette") });
-
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(400);
-  const closed = (await page.locator('[aria-label="Busca global"]').count()) === 0;
-  const focusAfterClose = await page.evaluate(
-    () => (document.activeElement as HTMLElement)?.tagName.toLowerCase() ?? "—"
-  );
-
-  dump("a11y-palette", { opened, focused, tooShort, beforeTab, afterTab, semantics, closed, focusAfterClose });
-  // eslint-disable-next-line no-console
-  console.log(JSON.stringify({ opened, focused, tooShort, beforeTab, afterTab, semantics, closed, focusAfterClose }, null, 1));
 });
 
 // ════════════════════════════════════════════════════════════════════════

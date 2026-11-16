@@ -45,6 +45,11 @@ describe('MoneyInput', () => {
     expect(screen.getByText('Price')).toBeInTheDocument();
   });
 
+  it('liga o rótulo ao campo: clicar no texto foca o input e o leitor de tela anuncia o nome', () => {
+    render(<TestWrapper />);
+    expect(screen.getByLabelText('Price')).toHaveAttribute('inputmode', 'numeric');
+  });
+
   it('should show R$ prefix', () => {
     render(<TestWrapper />);
     expect(screen.getByText('R$')).toBeInTheDocument();

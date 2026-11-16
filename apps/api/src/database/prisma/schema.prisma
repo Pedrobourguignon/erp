@@ -1145,11 +1145,15 @@ model FinancialAccount {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  transactions    FinancialTransaction[]
-  reconciliations BankReconciliation[]
-  paymentMethods  PaymentMethod[]
-  orderPayments   OrderPayment[]
-  cashRegisters   CashRegister[]
+  transactions       FinancialTransaction[]
+  reconciliations    BankReconciliation[]
+  paymentMethods     PaymentMethod[]
+  orderPayments      OrderPayment[]
+  cashRegisters      CashRegister[]         @relation("CashRegisterAccount")
+  /// Caixas que usam esta conta como cofre (destino da sangria, origem do suprimento).
+  vaultCashRegisters CashRegister[]         @relation("CashRegisterVaultAccount")
+  /// Sangrias que vieram para esta conta e suprimentos que saíram dela.
+  cashMovements      CashRegisterMovement[] @relation("CashMovementCounterpart")
 
   // FN-16: conta sem movimento pode ser excluída; com movimento, só inativada.
   deletedAt DateTime?
@@ -1309,6 +1313,8 @@ model PaymentMethod {
   defaultAccount        FinancialAccount? @relation(fields: [defaultAccountId], references: [id])
   feePercentage         Decimal?          @db.Decimal(5, 2)
   settlementDays        Int?
+  /// Baixa os títulos desta forma sozinho, no dia do vencimento.
+  autoSettle            Boolean           @default(false)
   requiresAuthorization Boolean           @default(false)
   fiscalCode            String?           @db.VarChar(5)
 
@@ -1387,10 +1393,15 @@ model CashRegister {
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name               String           @db.VarChar(100)
+  name               String            @db.VarChar(100)
   financialAccountId String
-  financialAccount   FinancialAccount @relation(fields: [financialAccountId], references: [id])
-  isActive           Boolean          @default(true)
+  financialAccount   FinancialAccount  @relation("CashRegisterAccount", fields: [financialAccountId], references: [id])
+  /// Cofre do caixa: para onde vai a sangria e de onde vem o suprimento quando
+  /// o operador não escolhe outra conta. Os dois são transferências entre a
+  /// gaveta e esta conta — ver ADR 0003.
+  vaultAccountId     String?
+  vaultAccount       FinancialAccount? @relation("CashRegisterVaultAccount", fields: [vaultAccountId], references: [id])
+  isActive           Boolean           @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1445,9 +1456,17 @@ model CashRegisterMovement {
   performedById String
   performedBy   User                @relation("MovementPerformedBy", fields: [performedById], references: [id])
 
+  /// A conta do outro lado da transferência: destino da sangria, origem do
+  /// suprimento. `transferId` é o referenceId das FinancialTransaction. Nulos
+  /// nos movimentos espelhados de baixas e nos anteriores ao ADR 0003.
+  counterpartAccountId String?
+  counterpartAccount   FinancialAccount? @relation("CashMovementCounterpart", fields: [counterpartAccountId], references: [id])
+  transferId           String?
+
   createdAt DateTime @default(now())
 
   @@index([sessionId])
+  @@index([counterpartAccountId])
   @@map("cash_register_movements")
 }
 
@@ -1689,6 +1708,7 @@ model Customer {
   document     String? // CPF ou CNPJ
   documentType String? // CPF ou CNPJ
   tradeName    String? // nome fantasia (PJ)
+  birthDate    DateTime? // data civil: meia-noite no fuso do lojista
 
   // Scoring e segmentação
   score   Int      @default(0)

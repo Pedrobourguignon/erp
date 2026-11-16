@@ -169,6 +169,7 @@ describe('useCreateCustomer', () => {
       document: '12345678900',
       email: 'new@test.com',
       phone: '11999999999',
+      birthDate: null,
     });
 
     expect(mockedApi.post).toHaveBeenCalledWith('/customers', {
@@ -177,6 +178,7 @@ describe('useCreateCustomer', () => {
       document: '12345678900',
       email: 'new@test.com',
       phone: '11999999999',
+      birthDate: null,
     });
   });
 });
@@ -201,6 +203,7 @@ describe('useUpdateCustomer', () => {
       document: '12345678900',
       email: 'upd@test.com',
       phone: '11999999999',
+      birthDate: null,
     });
 
     expect(mockedApi.patch).toHaveBeenCalledWith('/customers/c1', {
@@ -209,6 +212,7 @@ describe('useUpdateCustomer', () => {
       document: '12345678900',
       email: 'upd@test.com',
       phone: '11999999999',
+      birthDate: null,
     });
   });
 });

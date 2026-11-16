@@ -45,6 +45,7 @@ function RegisterActions({
             <Button
               size="sm"
               className="flex-1"
+              aria-label={`Abrir Caixa - ${reg.name}`}
               onClick={() => onOpen(reg)}
             >
               <DoorOpen className="mr-1.5 h-3.5 w-3.5" />
@@ -60,6 +61,7 @@ function RegisterActions({
               <Button
                 size="sm"
                 className="flex-1"
+                aria-label={`Fechar - ${reg.name}`}
                 onClick={() => onClose(reg)}
               >
                 <DoorClosed className="mr-1.5 h-3.5 w-3.5" />
@@ -69,6 +71,7 @@ function RegisterActions({
                 <Button
                   size="sm"
                   variant="outline"
+                  aria-label={`Suprimento - ${reg.name}`}
                   onClick={() => onSupply(reg)}
                 >
                   <ArrowUpCircle className="h-3.5 w-3.5" />
@@ -78,6 +81,7 @@ function RegisterActions({
                 <Button
                   size="sm"
                   variant="outline"
+                  aria-label={`Sangria - ${reg.name}`}
                   onClick={() => onWithdraw(reg)}
                 >
                   <ArrowDownCircle className="h-3.5 w-3.5" />
@@ -87,6 +91,7 @@ function RegisterActions({
                 <Button
                   size="sm"
                   variant="outline"
+                  aria-label={`Ver sessão - ${reg.name}`}
                   onClick={() => onViewSession(reg)}
                 >
                   <Eye className="h-3.5 w-3.5" />

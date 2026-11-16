@@ -1,5 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, ConflictException } from '@nestjs/common';
+import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { CustomersService } from './customers.service';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { CreateCustomerDto, UpdateCustomerDto, CustomerQueryDto } from './dto/customer.dto';
@@ -112,6 +114,85 @@ describe('CustomersService', () => {
       const createArgs = prisma.customer.create.mock.calls[0][0];
       expect(createArgs.data.tenantId).toBe(TENANT_A);
       expect(createArgs.data.name).toBe('Jane Doe');
+    });
+
+    // ─── CPF/CNPJ e e-mail são opcionais; data de nascimento também ──────
+
+    it('creates a customer with no document and no e-mail', async () => {
+      prisma.customer.findFirst.mockResolvedValue(null);
+      prisma.customer.create.mockResolvedValue(makeCustomer());
+
+      await service.create(TENANT_A, { name: 'Cliente de balcão', phone: '11999990000' });
+
+      const data = prisma.customer.create.mock.calls[0][0].data;
+      expect(data.document).toBeUndefined();
+      expect(data.email).toBeUndefined();
+      // sem documento nem e-mail não há o que checar de duplicidade
+      expect(prisma.customer.findFirst).not.toHaveBeenCalled();
+    });
+
+    describe('birth date', () => {
+      beforeEach(() => {
+        jest.useFakeTimers().setSystemTime(new Date('2026-11-12T13:00:00.000Z'));
+        prisma.customer.findFirst.mockResolvedValue(null);
+        prisma.customer.create.mockResolvedValue(makeCustomer());
+      });
+      afterEach(() => jest.useRealTimers());
+
+      it('stores it as a civil date: midnight in the tenant timezone', async () => {
+        await service.create(TENANT_A, { ...baseDto, birthDate: '1990-05-20' });
+
+        // 20/05/1990 00:00 em Brasília — e não 21:00 do dia 19 (FN-02)
+        expect(prisma.customer.create.mock.calls[0][0].data.birthDate).toEqual(
+          new Date('1990-05-20T03:00:00.000Z'),
+        );
+      });
+
+      it('is optional', async () => {
+        await service.create(TENANT_A, baseDto);
+
+        expect(prisma.customer.create.mock.calls[0][0].data.birthDate).toBeUndefined();
+      });
+
+      it('accepts someone born today', async () => {
+        await service.create(TENANT_A, { ...baseDto, birthDate: '2026-11-12' });
+
+        expect(prisma.customer.create).toHaveBeenCalled();
+      });
+
+      it.each([
+        ['in the future', '2026-11-13', 'A data de nascimento não pode ser no futuro.'],
+        ['before 1900', '1899-12-31', 'Informe uma data de nascimento a partir de 1900.'],
+        ['that does not exist', '1990-02-31', 'Data de nascimento inválida.'],
+      ])('refuses a birth date %s, in Portuguese', async (_label, birthDate, message) => {
+        await expect(
+          service.create(TENANT_A, { ...baseDto, birthDate }),
+        ).rejects.toThrow(new BadRequestException(message));
+        expect(prisma.customer.create).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['an invalid CPF', 'CPF', '111.111.111-11'],
+        ['an invalid CNPJ', 'CNPJ', '11.111.111/1111-11'],
+      ])('refuses %s at the door (AE-04), but a blank document is fine', async (_l, documentType, document) => {
+        const bad = plainToInstance(CreateCustomerDto, { name: 'Ana', documentType, document });
+        const none = plainToInstance(CreateCustomerDto, { name: 'Ana' });
+        const nulled = plainToInstance(CreateCustomerDto, { name: 'Ana', document: null, documentType: null });
+
+        expect((await validate(bad)).map((e) => e.property)).toContain('document');
+        expect(await validate(none)).toHaveLength(0);
+        expect(await validate(nulled)).toHaveLength(0);
+      });
+
+      it('only accepts YYYY-MM-DD at the door (DTO)', async () => {
+        const bad = plainToInstance(CreateCustomerDto, { name: 'Ana', birthDate: '20/05/1990' });
+        const good = plainToInstance(CreateCustomerDto, { name: 'Ana', birthDate: '1990-05-20' });
+        const none = plainToInstance(CreateCustomerDto, { name: 'Ana' });
+
+        expect((await validate(bad)).map((e) => e.property)).toContain('birthDate');
+        expect(await validate(good)).toHaveLength(0);
+        expect(await validate(none)).toHaveLength(0);
+      });
     });
 
     // ─── AE-15: o documento é guardado só com dígitos ────────────────────
@@ -406,6 +487,51 @@ describe('CustomersService', () => {
 
       expect(result.name).toBe('Updated Name');
       expect(prisma.customer.update).toHaveBeenCalledTimes(1);
+    });
+
+    describe('optional fields', () => {
+      beforeEach(() => {
+        jest.useFakeTimers().setSystemTime(new Date('2026-11-12T13:00:00.000Z'));
+        prisma.customer.findFirst.mockResolvedValue(
+          makeCustomer({ email: 'a@b.com', document: '12345678901', birthDate: new Date('1990-05-20T03:00:00.000Z') }),
+        );
+        prisma.customer.update.mockResolvedValue(makeCustomer());
+      });
+      afterEach(() => jest.useRealTimers());
+
+      it('updates the birth date as a civil date', async () => {
+        await service.update(TENANT_A, 'cust-001', { birthDate: '1985-07-01' });
+
+        expect(prisma.customer.update.mock.calls[0][0].data.birthDate).toEqual(
+          new Date('1985-07-01T03:00:00.000Z'),
+        );
+      });
+
+      it('refuses a future birth date on update too', async () => {
+        await expect(
+          service.update(TENANT_A, 'cust-001', { birthDate: '2027-01-01' }),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('leaves the birth date alone when it is not sent', async () => {
+        await service.update(TENANT_A, 'cust-001', { name: 'Outro nome' });
+
+        expect(prisma.customer.update.mock.calls[0][0].data.birthDate).toBeUndefined();
+      });
+
+      it('clears birth date, e-mail and document when null is sent', async () => {
+        await service.update(TENANT_A, 'cust-001', {
+          birthDate: null,
+          email: null,
+          document: null,
+        } as UpdateCustomerDto);
+
+        const data = prisma.customer.update.mock.calls[0][0].data;
+        expect(data.birthDate).toBeNull();
+        expect(data.email).toBeNull();
+        expect(data.document).toBeNull();
+        expect(data.documentType).toBeNull();
+      });
     });
 
     it('should throw NotFoundException when customer not found', async () => {
