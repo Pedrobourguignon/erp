@@ -23,6 +23,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CashRegistersModule } from './modules/cash-registers/cash-registers.module';
 import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
+import { CardMachinesModule } from './modules/card-machines/card-machines.module';
 import { PaymentConditionsModule } from './modules/payment-conditions/payment-conditions.module';
 import { HealthModule } from './modules/health/health.module';
 import { EventsModule } from './events/events.module';
@@ -99,6 +100,7 @@ import { redisConnection } from './config/runtime-config';
     AuditModule,
     CashRegistersModule,
     PaymentMethodsModule,
+    CardMachinesModule,
     PaymentConditionsModule,
     HealthModule,
 

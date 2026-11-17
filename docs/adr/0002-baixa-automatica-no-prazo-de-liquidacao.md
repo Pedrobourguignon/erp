@@ -1,6 +1,6 @@
 # ADR 0002 — Baixa automática no prazo de liquidação da forma de pagamento
 
-- **Status:** aceita
+- **Status:** aceita — prazo e taxa do cartão substituídos pelo [ADR 0005](0005-maquininha-dona-das-taxas-do-cartao.md)
 - **Data:** 2026-11-12
 
 ## Contexto

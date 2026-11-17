@@ -1,5 +1,6 @@
 import {
   test,
+  createCardMethod,
   expect,
   createCustomer,
   ensureOpenCashSession,
@@ -59,20 +60,12 @@ test.describe("venda: pedido", () => {
     expect(exits.some((m) => m.reason === "SALE")).toBeTruthy();
   });
 
-  test("VD-05: a condição a prazo gera parcelas que somam exatamente o total", async ({
+  test("VD-05: as parcelas digitadas na venda geram títulos que somam exatamente o total", async ({
     apiClient,
   }) => {
-    const conditions = await apiClient.get("/payment-conditions?limit=50");
-    const installmentCondition = (
-      (conditions.body as { data?: { id: string; installments: number }[] }).data ?? []
-    ).find((c) => c.installments > 1);
-    test.skip(!installmentCondition, "nenhuma condição parcelada cadastrada");
-
-    const methods = await apiClient.get("/payment-methods?limit=50");
-    const term = (
-      (methods.body as { data?: { id: string; type: string }[] }).data ?? []
-    ).find((m) => m.type === "BOLETO" || m.type === "CREDIT_CARD");
-    test.skip(!term, "nenhuma forma de pagamento a prazo cadastrada");
+    // O vendedor digita as parcelas; o método diz até quantas aceita.
+    // A maquininha parcela em até 3x, sem taxa (a soma é o que importa aqui).
+    const { method: term } = await createCardMethod(apiClient, { creditRates: [0, 0, 0] });
 
     await ensureOpenCashSession(apiClient);
     const product = await ensureSellableProduct(apiClient);
@@ -83,11 +76,7 @@ test.describe("venda: pedido", () => {
       origin: "MANUAL",
       items: [{ productId: product.id, quantity: 1, unitPrice: 199.8 }],
       payments: [
-        {
-          paymentMethodId: term!.id,
-          paymentConditionId: installmentCondition!.id,
-          amount: 199.8,
-        },
+        { paymentMethodId: term.id, installments: 3, amount: 199.8 },
       ],
     });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
@@ -133,8 +122,27 @@ test.describe("venda: pedido", () => {
     expect(sum, `${entries.length} parcelas somando ${sum / 100} para um total de ${total}`)
       .toBe(Math.round(total * 100));
 
-    // E as parcelas são numeradas — a coluna "1/3" da aba Financeiro.
-    expect(entries.every((e) => e.totalInstallments > 0)).toBeTruthy();
+    // Exatamente as 3 parcelas escolhidas, numeradas — a coluna "1/3" da aba Financeiro.
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e) => e.totalInstallments === 3)).toBeTruthy();
+  });
+
+  test("a venda recusa mais parcelas do que a maquininha aceita", async ({ apiClient }) => {
+    const { method: term } = await createCardMethod(apiClient, { creditRates: [0, 0, 0] });
+
+    await ensureOpenCashSession(apiClient);
+    const product = await ensureSellableProduct(apiClient);
+    const customer = await createCustomer(apiClient);
+
+    const refused = await apiClient.post("/orders", {
+      customerId: customer.id,
+      origin: "MANUAL",
+      items: [{ productId: product.id, quantity: 1, unitPrice: 50 }],
+      payments: [{ paymentMethodId: term.id, installments: 4, amount: 50 }],
+    });
+
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(refused.body)).toContain("no máximo 3 parcelas");
   });
 
   test("VD-02: a UI oferece a próxima transição em vez de travar em Separando", async ({

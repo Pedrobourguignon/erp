@@ -18,7 +18,6 @@ const SCREENS = [
   { name: "Movimentações", path: "/estoque/movimentacoes", expectedFilters: 6 },
   { name: "Contas financeiras", path: "/financeiro/contas", expectedFilters: 2 },
   { name: "Métodos de pagamento", path: "/configuracoes/metodos-pagamento", expectedFilters: 2 },
-  { name: "Condições de pagamento", path: "/configuracoes/condicoes-pagamento", expectedFilters: 2 },
   { name: "Caixa", path: "/financeiro/caixa", expectedFilters: 2 },
 ];
 

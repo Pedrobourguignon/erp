@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma/prisma.service';
 import { civilDaysFrom } from '../../../common/utils/date-range.util';
 import { subtractMoney, sumMoney, toMoney } from '../../../common/utils/money.util';
-import { settlesAtSale } from '../../../common/constants/payment.constants';
+import { methodSettlesAtSale } from '../../../common/constants/payment.constants';
 import { FinancialSettlementsService } from '../../financial/financial-settlements.service';
 import { OrderAdjustmentSettlementDto } from '../dto/order-adjustment-settlement.dto';
 
@@ -65,11 +65,18 @@ export class OrderAdjustmentFinance {
   ): Promise<SettlementPlan> {
     const method = await this.prisma.paymentMethod.findFirst({
       where: { id: dto.paymentMethodId, tenantId },
-      select: { id: true, name: true, type: true, settlementDays: true, defaultAccountId: true },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        settlementDays: true,
+        defaultAccountId: true,
+        cardMachine: { select: { debitSettlementDays: true } },
+      },
     });
     if (!method) throw new NotFoundException('Forma de pagamento não encontrada');
 
-    if (!settlesAtSale(method.type, method.settlementDays)) {
+    if (!methodSettlesAtSale(method)) {
       return { paymentMethodId: method.id, accountId: null };
     }
 

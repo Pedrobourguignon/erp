@@ -34,6 +34,21 @@ export interface PaymentMethod {
   defaultAccount?: { id: string; name: string; type: string } | null;
   feePercentage: number;
   settlementDays: number;
+  /**
+   * Até quantas parcelas o vendedor pode escolher na venda (1 = não parcela).
+   * No cartão a API já devolve o máximo da maquininha.
+   */
+  maxInstallments: number;
+  /** Obrigatória no cartão: dela vêm taxas, prazos e parcelas. */
+  cardMachineId?: string | null;
+  cardMachine?: {
+    id: string;
+    name: string;
+    provider: string | null;
+    isActive: boolean;
+    creditReceiveMode: "FLOW" | "ANTICIPATED";
+    creditSettlementDays?: number;
+  } | null;
   /** Baixa os títulos desta forma sozinho, no dia da liquidação. */
   autoSettle: boolean;
   requiresAuthorization: boolean;
@@ -91,6 +106,8 @@ export interface CreatePaymentMethodPayload {
   defaultAccountId?: string;
   feePercentage?: number;
   settlementDays?: number;
+  maxInstallments?: number;
+  cardMachineId?: string;
   autoSettle?: boolean;
   requiresAuthorization?: boolean;
   fiscalCode?: string;

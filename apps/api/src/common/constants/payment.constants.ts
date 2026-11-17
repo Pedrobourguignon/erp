@@ -30,5 +30,26 @@ export function settlesAtSale(
   return isImmediatePayment(type) && !(settlementDays && settlementDays > 0);
 }
 
+/**
+ * Same question for a method that may be linked to a card machine: the
+ * machine's terms win over whatever is left on the method. Only a debit on the
+ * spot (D+0) settles at the sale; a credit sale always settles through its
+ * receivables, even when it is anticipated.
+ */
+export function methodSettlesAtSale(method: {
+  type: PaymentMethodType | string;
+  settlementDays?: number | null;
+  cardMachine?: { debitSettlementDays: number } | null;
+}): boolean {
+  if (method.cardMachine && isCardMethod(method.type)) {
+    return method.type === 'DEBIT_CARD' && method.cardMachine.debitSettlementDays === 0;
+  }
+  return settlesAtSale(method.type, method.settlementDays);
+}
+
+export function isCardMethod(type: PaymentMethodType | string): boolean {
+  return type === 'CREDIT_CARD' || type === 'DEBIT_CARD';
+}
+
 /** Marks an AccountsPayable as the acquirer fee of a sale payment. */
 export const PAYMENT_FEE_KIND = 'PAYMENT_FEE';

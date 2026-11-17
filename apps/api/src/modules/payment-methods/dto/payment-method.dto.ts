@@ -5,12 +5,16 @@ import {
   IsNumber,
   IsBoolean,
   IsIn,
+  IsInt,
   Min,
   Max,
   MaxLength,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+/** Teto do cadastro — nenhuma maquininha parcela além disso. */
+export const MAX_INSTALLMENTS_LIMIT = 24;
 
 export class CreatePaymentMethodDto {
   @ApiProperty({ example: 'Dinheiro' })
@@ -41,6 +45,25 @@ export class CreatePaymentMethodDto {
   @IsNumber()
   @Min(0)
   settlementDays?: number;
+
+  @ApiPropertyOptional({
+    description: 'Maquininha do cartão (obrigatória para crédito e débito).',
+  })
+  @IsOptional()
+  @IsString()
+  cardMachineId?: string | null;
+
+  @ApiPropertyOptional({
+    default: 1,
+    description: 'Até quantas parcelas o vendedor pode digitar na venda (1 = não parcela).',
+  })
+  @IsOptional()
+  @IsInt({ message: 'O máximo de parcelas precisa ser um número inteiro' })
+  @Min(1, { message: 'O máximo de parcelas é pelo menos 1' })
+  @Max(MAX_INSTALLMENTS_LIMIT, {
+    message: `O máximo de parcelas é ${MAX_INSTALLMENTS_LIMIT}`,
+  })
+  maxInstallments?: number;
 
   @ApiPropertyOptional({
     default: false,
@@ -97,6 +120,25 @@ export class UpdatePaymentMethodDto {
   @IsNumber()
   @Min(0)
   settlementDays?: number;
+
+  @ApiPropertyOptional({
+    description: 'Maquininha do cartão (obrigatória para crédito e débito).',
+  })
+  @IsOptional()
+  @IsString()
+  cardMachineId?: string | null;
+
+  @ApiPropertyOptional({
+    default: 1,
+    description: 'Até quantas parcelas o vendedor pode digitar na venda (1 = não parcela).',
+  })
+  @IsOptional()
+  @IsInt({ message: 'O máximo de parcelas precisa ser um número inteiro' })
+  @Min(1, { message: 'O máximo de parcelas é pelo menos 1' })
+  @Max(MAX_INSTALLMENTS_LIMIT, {
+    message: `O máximo de parcelas é ${MAX_INSTALLMENTS_LIMIT}`,
+  })
+  maxInstallments?: number;
 
   @ApiPropertyOptional({
     default: false,

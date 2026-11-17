@@ -1,28 +1,16 @@
+import { render, screen } from '@testing-library/react';
+import React from 'react';
 import { describe, it, expect } from 'vitest';
 
-import type { PaymentCondition } from '@/hooks/use-payment-conditions';
 import type { PaymentMethod } from '@/hooks/use-payment-methods';
 
 import {
   requiresLinkedAccount,
   hasMissingAccount,
-  filterConditionsForMethod,
+  installmentChoices,
+  fitInstallments,
+  InstallmentPreview,
 } from './payment-line';
-
-function makeCondition(overrides: Partial<PaymentCondition> = {}): PaymentCondition {
-  return {
-    id: 'pc-1',
-    name: 'A Vista',
-    code: 'AV',
-    type: 'CASH',
-    installments: 1,
-    daysBetweenInstallments: 0,
-    entryPercentage: 0,
-    isActive: true,
-    paymentMethodIds: [],
-    ...overrides,
-  };
-}
 
 function makeMethod(overrides: Partial<PaymentMethod> = {}): PaymentMethod {
   return {
@@ -35,6 +23,7 @@ function makeMethod(overrides: Partial<PaymentMethod> = {}): PaymentMethod {
     autoSettle: false,
     requiresAuthorization: false,
     fiscalCode: null,
+    maxInstallments: 1,
     isActive: true,
     ...overrides,
   };
@@ -112,42 +101,78 @@ describe('hasMissingAccount', () => {
   });
 });
 
-describe('filterConditionsForMethod', () => {
-  const unlinked = makeCondition({ id: 'pc-avista', paymentMethodIds: [] });
-  const linkedToCard = makeCondition({
-    id: 'pc-12x',
-    name: '12x sem juros',
-    paymentMethodIds: ['pm-card'],
-  });
-  const linkedToBoleto = makeCondition({
-    id: 'pc-boleto-30',
-    name: 'Boleto 30 dias',
-    paymentMethodIds: ['pm-boleto'],
-  });
-  const conditions = [unlinked, linkedToCard, linkedToBoleto];
-
-  it('keeps every condition when no method is selected', () => {
-    expect(filterConditionsForMethod(conditions, undefined)).toEqual(conditions);
-  });
-
-  it('shows an unlinked condition for any method', () => {
-    expect(filterConditionsForMethod([unlinked], 'pm-card')).toEqual([unlinked]);
-    expect(filterConditionsForMethod([unlinked], 'pm-boleto')).toEqual([unlinked]);
-  });
-
-  it('shows only the conditions linked to the selected method, plus the unlinked ones', () => {
-    expect(filterConditionsForMethod(conditions, 'pm-card')).toEqual([
-      unlinked,
-      linkedToCard,
+// O vendedor digita as parcelas na venda; o método diz até quantas aceita.
+describe('installmentChoices', () => {
+  it('offers 1x up to the maximum of the method', () => {
+    expect(installmentChoices(makeMethod({ type: 'CREDIT_CARD', maxInstallments: 4 }))).toEqual([
+      1, 2, 3, 4,
     ]);
   });
 
-  it('hides a condition linked to a different method', () => {
-    const result = filterConditionsForMethod(conditions, 'pm-card');
-    expect(result).not.toContainEqual(linkedToBoleto);
+  it('offers nothing for a method that is not split', () => {
+    expect(installmentChoices(makeMethod({ maxInstallments: 1 }))).toEqual([]);
   });
 
-  it('hides every linked condition when the method matches none of them', () => {
-    expect(filterConditionsForMethod(conditions, 'pm-pix')).toEqual([unlinked]);
+  it('offers nothing when no method is selected', () => {
+    expect(installmentChoices(undefined)).toEqual([]);
   });
 });
+
+describe('fitInstallments', () => {
+  it('keeps a number the new method still accepts', () => {
+    expect(fitInstallments(3, makeMethod({ maxInstallments: 6 }))).toBe(3);
+  });
+
+  // Trocar de um cartão 12x (com 10x escolhido) para PIX não pode levar o 10x junto.
+  it('falls back to 1x when the new method accepts fewer', () => {
+    expect(fitInstallments(10, makeMethod({ maxInstallments: 6 }))).toBe(1);
+    expect(fitInstallments(3, makeMethod({ maxInstallments: 1 }))).toBe(1);
+  });
+
+  it('treats an empty value as 1x', () => {
+    expect(fitInstallments(undefined, makeMethod({ maxInstallments: 6 }))).toBe(1);
+  });
+});
+
+describe('InstallmentPreview', () => {
+  it('shows the same split the API will create, with the cent left on the last one', () => {
+    render(<InstallmentPreview installments={3} amount={250} />);
+
+    expect(screen.getByText(/3x de R\$\s?83,33/)).toBeInTheDocument();
+    expect(screen.getByText(/última de R\$\s?83,34/)).toBeInTheDocument();
+    expect(screen.getByText(/30\/60\/90 dias/)).toBeInTheDocument();
+  });
+
+  // O prazo vem da maquininha do cartão.
+  it('follows the first transfer of the card machine', () => {
+    render(
+      <InstallmentPreview
+        installments={3}
+        amount={300}
+        receipt={{ mode: 'FLOW', firstDays: 31 }}
+      />
+    );
+
+    expect(screen.getByText(/31\/61\/91 dias/)).toBeInTheDocument();
+  });
+
+  it('tells that an anticipated machine pays it all at once', () => {
+    render(
+      <InstallmentPreview
+        installments={3}
+        amount={300}
+        receipt={{ mode: 'ANTICIPATED', firstDays: 1 }}
+      />
+    );
+
+    expect(screen.getByText(/3x de R\$\s?100,00/)).toBeInTheDocument();
+    expect(screen.getByText(/cai tudo em 1 dia/)).toBeInTheDocument();
+  });
+
+  it('shows nothing for a single installment', () => {
+    const { container } = render(<InstallmentPreview installments={1} amount={250} />);
+
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+

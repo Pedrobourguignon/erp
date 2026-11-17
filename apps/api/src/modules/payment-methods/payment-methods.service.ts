@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { Prisma, PaymentMethodType } from '@prisma/client';
+import { cardMaxInstallments } from '@erp/validators';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import {
   CreatePaymentMethodDto,
@@ -16,6 +17,26 @@ import {
   buildPaginatedResponse,
   buildPrismaOrderBy,
 } from '../../common/utils/pagination';
+
+/**
+ * O que a tela de venda precisa da maquininha: só quantas parcelas ela aceita.
+ * As taxas ficam de fora — quem vende lê métodos (`payment-methods:read`), não
+ * o contrato com a operadora.
+ */
+const METHOD_INCLUDE = {
+  defaultAccount: { select: { id: true, name: true, type: true } },
+  cardMachine: {
+    select: {
+      id: true,
+      name: true,
+      provider: true,
+      isActive: true,
+      creditReceiveMode: true,
+      creditSettlementDays: true,
+      rates: { select: { installments: true }, orderBy: { installments: 'asc' as const } },
+    },
+  },
+};
 
 @Injectable()
 export class PaymentMethodsService {
@@ -44,26 +65,22 @@ export class PaymentMethodsService {
         skip,
         take: limit,
         orderBy: { name: 'asc' },
-        include: {
-          defaultAccount: {
-            select: { id: true, name: true, type: true },
-          },
-        },
+        include: METHOD_INCLUDE,
       }),
       this.prisma.paymentMethod.count({ where }),
     ]);
 
-    return buildPaginatedResponse(data, total, { page, limit, sortOrder: 'asc' });
+    return buildPaginatedResponse(data.map(withEffectiveInstallments), total, {
+      page,
+      limit,
+      sortOrder: 'asc',
+    });
   }
 
   async findOne(tenantId: string, id: string) {
     const method = await this.prisma.paymentMethod.findFirst({
       where: { id, tenantId },
-      include: {
-        defaultAccount: {
-          select: { id: true, name: true, type: true },
-        },
-      },
+      include: METHOD_INCLUDE,
     });
 
     if (!method) {
@@ -72,11 +89,14 @@ export class PaymentMethodsService {
       );
     }
 
-    return method;
+    return withEffectiveInstallments(method);
   }
 
   async create(tenantId: string, dto: CreatePaymentMethodDto) {
     assertImmediateHasAccount(dto.type, dto.defaultAccountId);
+    assertImmediateNotSplit(dto.type, dto.maxInstallments);
+    const cardMachineId = await this.resolveCardMachine(tenantId, dto.type, dto.cardMachineId);
+    const isCard = isCardType(dto.type);
     assertAnticipationRules({
       autoSettle: dto.autoSettle,
       defaultAccountId: dto.defaultAccountId,
@@ -99,25 +119,24 @@ export class PaymentMethodsService {
         name: dto.name,
         type: dto.type as PaymentMethodType,
         defaultAccountId: dto.defaultAccountId,
-        feePercentage: dto.feePercentage,
-        settlementDays: dto.settlementDays,
+        // No cartão, taxa, prazo e parcelas vêm da maquininha.
+        feePercentage: isCard ? null : dto.feePercentage,
+        settlementDays: isCard ? null : dto.settlementDays,
+        maxInstallments: isCard ? 1 : (dto.maxInstallments ?? 1),
+        cardMachineId,
         autoSettle: dto.autoSettle ?? false,
         requiresAuthorization: dto.requiresAuthorization ?? false,
         fiscalCode: dto.fiscalCode,
         isActive: dto.isActive ?? true,
       },
-      include: {
-        defaultAccount: {
-          select: { id: true, name: true, type: true },
-        },
-      },
+      include: METHOD_INCLUDE,
     });
 
     this.logger.log(
       `Payment method created: ${method.name} (${method.id}) for tenant ${tenantId}`,
     );
 
-    return method;
+    return withEffectiveInstallments(method);
   }
 
   async update(tenantId: string, id: string, dto: UpdatePaymentMethodDto) {
@@ -138,6 +157,18 @@ export class PaymentMethodsService {
       dto.defaultAccountId !== undefined
         ? dto.defaultAccountId
         : existing.defaultAccountId,
+    );
+
+    assertImmediateNotSplit(
+      dto.type ?? existing.type,
+      dto.maxInstallments ?? existing.maxInstallments,
+    );
+
+    const resultingType = dto.type ?? existing.type;
+    const cardMachineId = await this.resolveCardMachine(
+      tenantId,
+      resultingType,
+      dto.cardMachineId !== undefined ? dto.cardMachineId : existing.cardMachineId,
     );
 
     // O que vale é o método como ficará depois da edição.
@@ -164,26 +195,60 @@ export class PaymentMethodsService {
     if (dto.defaultAccountId !== undefined) updateData.defaultAccountId = dto.defaultAccountId;
     if (dto.feePercentage !== undefined) updateData.feePercentage = dto.feePercentage;
     if (dto.settlementDays !== undefined) updateData.settlementDays = dto.settlementDays;
+    if (dto.maxInstallments !== undefined) updateData.maxInstallments = dto.maxInstallments;
     if (dto.autoSettle !== undefined) updateData.autoSettle = dto.autoSettle;
     if (dto.requiresAuthorization !== undefined) updateData.requiresAuthorization = dto.requiresAuthorization;
     if (dto.fiscalCode !== undefined) updateData.fiscalCode = dto.fiscalCode;
     if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
+    updateData.cardMachineId = cardMachineId;
+    if (isCardType(resultingType)) {
+      updateData.feePercentage = null;
+      updateData.settlementDays = null;
+      updateData.maxInstallments = 1;
+    }
 
     const updated = await this.prisma.paymentMethod.update({
       where: { id },
       data: updateData,
-      include: {
-        defaultAccount: {
-          select: { id: true, name: true, type: true },
-        },
-      },
+      include: METHOD_INCLUDE,
     });
 
     this.logger.log(
       `Payment method updated: ${updated.name} (${updated.id}) for tenant ${tenantId}`,
     );
 
-    return updated;
+    return withEffectiveInstallments(updated);
+  }
+
+  /**
+   * Crédito e débito precisam de uma maquininha ativa da mesma empresa; os
+   * demais tipos nunca ficam vinculados a uma.
+   */
+  private async resolveCardMachine(
+    tenantId: string,
+    type: string | undefined,
+    cardMachineId: string | null | undefined,
+  ): Promise<string | null> {
+    if (!isCardType(type)) return null;
+    if (!cardMachineId) {
+      throw new BadRequestException(
+        'Escolha a maquininha desta forma de pagamento — é dela que vêm as taxas, os prazos e as parcelas do cartão.',
+      );
+    }
+
+    const machine = await this.prisma.cardMachine.findFirst({
+      where: { id: cardMachineId, tenantId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!machine) {
+      throw new BadRequestException('Maquininha não encontrada');
+    }
+    if (!machine.isActive) {
+      throw new BadRequestException(
+        `A maquininha "${machine.name}" está inativa. Reative-a em Configurações > Maquininhas ou escolha outra.`,
+      );
+    }
+    return machine.id;
   }
 
   async remove(tenantId: string, id: string) {
@@ -251,6 +316,22 @@ function assertImmediateHasAccount(
 }
 
 /**
+ * Dinheiro, PIX e débito entram inteiros na hora — parcelar um deles geraria
+ * recebíveis futuros para um dinheiro que já está na conta.
+ */
+function assertImmediateNotSplit(
+  type: string | undefined,
+  maxInstallments: number | null | undefined,
+): void {
+  if (!type || !IMMEDIATE_METHOD_TYPES.includes(type)) return;
+  if (!maxInstallments || maxInstallments <= 1) return;
+
+  throw new BadRequestException(
+    'Um método de dinheiro, PIX ou débito não pode ser parcelado — o valor entra inteiro na conta no momento da venda. Deixe o máximo de parcelas em 1.',
+  );
+}
+
+/**
  * Uma baixa automática sem conta para creditar falharia em silêncio todo dia.
  */
 function assertAnticipationRules(method: {
@@ -262,4 +343,31 @@ function assertAnticipationRules(method: {
       'A baixa automática precisa de uma conta financeira vinculada — é nela que o dinheiro entra no dia.',
     );
   }
+}
+
+const CARD_METHOD_TYPES = ['CREDIT_CARD', 'DEBIT_CARD'];
+
+function isCardType(type: string | undefined | null): boolean {
+  return !!type && CARD_METHOD_TYPES.includes(type);
+}
+
+/**
+ * Quantas parcelas a venda pode oferecer: no crédito, a maior linha da tabela
+ * da maquininha; no débito, nunca parcela; nos demais, o máximo do método.
+ */
+function withEffectiveInstallments<
+  T extends {
+    type: string;
+    maxInstallments: number;
+    cardMachine?: { rates: { installments: number }[] } | null;
+  },
+>(method: T): T {
+  if (method.type === 'DEBIT_CARD') return { ...method, maxInstallments: 1 };
+  if (method.type === 'CREDIT_CARD') {
+    return {
+      ...method,
+      maxInstallments: method.cardMachine ? cardMaxInstallments(method.cardMachine) : 1,
+    };
+  }
+  return method;
 }

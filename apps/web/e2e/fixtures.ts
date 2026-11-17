@@ -412,3 +412,52 @@ export async function waitFor<T>(
   expect(predicate(last), `${label} não se estabilizou: ${JSON.stringify(last)}`).toBeTruthy();
   return last;
 }
+
+export interface CardMachineSetup {
+  type?: "CREDIT_CARD" | "DEBIT_CARD";
+  /** Taxa total de 1x, 2x, 3x… (a posição é o número de parcelas). */
+  creditRates?: number[];
+  creditReceiveMode?: "FLOW" | "ANTICIPATED";
+  creditSettlementDays?: number;
+  debitFeePercentage?: number;
+  debitSettlementDays?: number;
+  /** Campos extras do método (conta, baixa automática…). */
+  method?: Record<string, unknown>;
+}
+
+/**
+ * Uma maquininha nova e um método de cartão vinculado a ela. No cartão, taxas,
+ * prazos e parcelas vêm da maquininha — o método sozinho é recusado.
+ */
+export async function createCardMethod(
+  client: ApiClient,
+  setup: CardMachineSetup = {}
+): Promise<{ machine: { id: string; name: string }; method: { id: string; name: string } }> {
+  const suffix = stamp();
+  const machineResponse = await client.post("/card-machines", {
+    name: `Maquininha E2E ${suffix}`,
+    provider: "E2E",
+    debitFeePercentage: setup.debitFeePercentage ?? 0,
+    debitSettlementDays: setup.debitSettlementDays ?? 1,
+    creditReceiveMode: setup.creditReceiveMode ?? "FLOW",
+    creditSettlementDays: setup.creditSettlementDays ?? 30,
+    rates: (setup.creditRates ?? [0]).map((feePercentage, i) => ({
+      installments: i + 1,
+      feePercentage,
+    })),
+  });
+  expect(machineResponse.status, JSON.stringify(machineResponse.body)).toBe(201);
+  const machine = (machineResponse.body as { data: { id: string; name: string } }).data;
+
+  const type = setup.type ?? "CREDIT_CARD";
+  const methodResponse = await client.post("/payment-methods", {
+    name: `${type === "CREDIT_CARD" ? "Crédito" : "Débito"} E2E ${suffix}`,
+    type,
+    cardMachineId: machine.id,
+    ...setup.method,
+  });
+  expect(methodResponse.status, JSON.stringify(methodResponse.body)).toBe(201);
+  const method = (methodResponse.body as { data: { id: string; name: string } }).data;
+
+  return { machine, method };
+}

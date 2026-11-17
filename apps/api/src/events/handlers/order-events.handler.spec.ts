@@ -786,6 +786,162 @@ describe('OrderEventsHandler', () => {
       });
     });
 
+    // Taxas e prazos do cartão vêm da maquininha vinculada ao método.
+    describe('card machine of the payment method', () => {
+      beforeEach(() => {
+        // 10/08/2026 12:00 em São Paulo
+        jest.useFakeTimers().setSystemTime(new Date('2026-08-10T15:00:00.000Z'));
+      });
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      const machine = (overrides: Record<string, unknown> = {}) => ({
+        debitFeePercentage: 1.5,
+        debitSettlementDays: 1,
+        creditReceiveMode: 'FLOW',
+        creditSettlementDays: 30,
+        rates: [
+          { installments: 1, feePercentage: 3.19 },
+          { installments: 2, feePercentage: 4.99 },
+          { installments: 3, feePercentage: 4.99 },
+        ],
+        ...overrides,
+      });
+
+      const payment = (
+        type: 'CREDIT_CARD' | 'DEBIT_CARD',
+        installments: number,
+        machineOverrides: Record<string, unknown> = {},
+      ) => ({
+        id: 'op-card',
+        amount: 300,
+        installments,
+        financialAccountId: 'acc-1',
+        paymentMethodId: 'pm-card',
+        paymentCondition: null,
+        paymentMethod: {
+          id: 'pm-card',
+          name: type === 'CREDIT_CARD' ? 'Crédito Stone' : 'Débito Stone',
+          type,
+          defaultAccountId: 'acc-1',
+          // O que sobrou no método não vale mais para o cartão.
+          settlementDays: 99,
+          feePercentage: 50,
+          cardMachine: machine(machineOverrides),
+        },
+      });
+
+      const sale = () =>
+        handler.handleOrderCounterSale(
+          new OrderCounterSaleEvent(ORDER_ID, TENANT_ID, USER_ID, 300, counterItems),
+        );
+
+      const receivables = () =>
+        prisma.accountsReceivable.create.mock.calls.map((c) => c[0].data);
+      const fees = () => prisma.accountsPayable.create.mock.calls.map((c) => c[0].data);
+
+      it('credit 3x in the flow: one receivable every 30 days', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([payment('CREDIT_CARD', 3)]);
+
+        await sale();
+
+        expect(receivables().map((r) => [r.installment, r.totalInstallments, r.amount])).toEqual([
+          [1, 3, 100],
+          [2, 3, 100],
+          [3, 3, 100],
+        ]);
+        expect(receivables().map((r) => r.dueDate)).toEqual([
+          new Date('2026-09-09T03:00:00.000Z'),
+          new Date('2026-10-09T03:00:00.000Z'),
+          new Date('2026-11-08T03:00:00.000Z'),
+        ]);
+        expect(receivables().every((r) => r.status === 'PENDING')).toBe(true);
+      });
+
+      it('credit 3x in the flow: the 3x rate, one fee per installment, due with it', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([payment('CREDIT_CARD', 3)]);
+
+        await sale();
+
+        // 4,99% de 300 = 14,97 → 4,99 em cada parcela
+        expect(fees().map((f) => f.amount)).toEqual([4.99, 4.99, 4.99]);
+        expect(fees().map((f) => f.dueDate)).toEqual(receivables().map((r) => r.dueDate));
+        expect(fees()[0]).toMatchObject({
+          description: 'Taxa Crédito Stone - PED-000001 (1/3)',
+          status: 'PENDING',
+          paymentMethodId: 'pm-card',
+          metadata: {
+            kind: 'PAYMENT_FEE',
+            orderId: ORDER_ID,
+            orderPaymentId: 'op-card',
+            feePercentage: 4.99,
+            installment: 1,
+          },
+        });
+      });
+
+      it('credit 3x anticipated: the whole amount at once, with the 3x total rate', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          payment('CREDIT_CARD', 3, {
+            creditReceiveMode: 'ANTICIPATED',
+            creditSettlementDays: 1,
+            rates: [
+              { installments: 1, feePercentage: 4.2 },
+              { installments: 2, feePercentage: 6.5 },
+              { installments: 3, feePercentage: 8.99 },
+            ],
+          }),
+        ]);
+
+        await sale();
+
+        expect(receivables()).toHaveLength(1);
+        expect(receivables()[0]).toMatchObject({
+          amount: 300,
+          status: 'PENDING',
+          dueDate: new Date('2026-08-11T03:00:00.000Z'),
+        });
+        expect(fees()).toHaveLength(1);
+        expect(fees()[0].amount).toBe(26.97);
+      });
+
+      it('debit D+1: pending until the transfer, no credit at the sale, debit fee', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([payment('DEBIT_CARD', 1)]);
+
+        await sale();
+
+        expect(receivables()[0]).toMatchObject({
+          status: 'PENDING',
+          dueDate: new Date('2026-08-11T03:00:00.000Z'),
+        });
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        // 1,5% de 300
+        expect(fees()[0].amount).toBe(4.5);
+      });
+
+      it('debit on the spot: paid and credited at the sale', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          payment('DEBIT_CARD', 1, { debitSettlementDays: 0 }),
+        ]);
+
+        await sale();
+
+        expect(receivables()[0].status).toBe('PAID');
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('books no fee when the machine charges none', async () => {
+        prisma.orderPayment.findMany.mockResolvedValue([
+          payment('DEBIT_CARD', 1, { debitFeePercentage: 0 }),
+        ]);
+
+        await sale();
+
+        expect(prisma.accountsPayable.create).not.toHaveBeenCalled();
+      });
+    });
+
     it('should NOT credit for non-immediate payment types (e.g. BOLETO)', async () => {
       prisma.orderPayment.findMany.mockResolvedValue([
         {

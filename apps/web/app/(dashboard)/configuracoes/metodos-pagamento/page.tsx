@@ -47,6 +47,8 @@ import {
 import { getApiErrorMessage } from "@/lib/api";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
 
+import { CardMachineSelect } from "./_components/card-machine-select";
+
 // ─── Constants ────────────────────────────────────────────────────────
 
 const TYPE_OPTIONS: { value: PaymentMethodType; label: string }[] = [
@@ -111,10 +113,16 @@ const methodSchema = z.object({
     .min(0, "O prazo de liquidação não pode ser negativo")
     .max(365, "O prazo máximo é 365 dias")
     .default(0),
+  maxInstallments: z
+    .number({ invalid_type_error: "Informe o máximo de parcelas" })
+    .int("Informe um número inteiro de parcelas")
+    .min(1, "O mínimo é 1 (não parcela)")
+    .max(24, "O máximo é 24 parcelas")
+    .default(1),
   autoSettle: z.boolean().default(false),
-  requiresAuthorization: z.boolean().default(false),
   fiscalCode: z.string().max(5).optional(),
   defaultAccountId: z.string().optional(),
+  cardMachineId: z.string().optional(),
   isActive: z.boolean().default(true),
 });
 
@@ -126,6 +134,22 @@ const methodSchemaWithAccount = methodSchema.superRefine((data, ctx) => {
       code: z.ZodIssueCode.custom,
       path: ["defaultAccountId"],
       message: "Formas à vista precisam de uma conta financeira vinculada",
+    });
+  }
+  // Espelha a API: no cartão, taxa, prazo e parcelas vêm da maquininha.
+  if (CARD_TYPES.includes(data.type) && !data.cardMachineId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["cardMachineId"],
+      message: "Escolha a maquininha desta forma de pagamento",
+    });
+  }
+  // Espelha a API: dinheiro, PIX e débito entram inteiros na hora.
+  if (IMMEDIATE_TYPES.includes(data.type) && data.maxInstallments > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxInstallments"],
+      message: "Dinheiro, PIX e débito não podem ser parcelados",
     });
   }
   // Espelha a API: baixa automática sem conta falharia em silêncio todo dia.
@@ -142,6 +166,10 @@ type MethodFormValues = z.infer<typeof methodSchema>;
 
 /** Tipos liquidados na hora — a venda credita a conta imediatamente. */
 const IMMEDIATE_TYPES: PaymentMethodType[] = ["CASH", "PIX", "DEBIT_CARD"];
+
+/** Cartão: taxa, prazo e parcelas vêm da maquininha vinculada. */
+const CARD_TYPES: PaymentMethodType[] = ["CREDIT_CARD", "DEBIT_CARD"];
+const isCard = (type: PaymentMethodType) => CARD_TYPES.includes(type);
 
 /**
  * VD-11: mostra a conta vinculada e denuncia a ausência dela num método à
@@ -350,7 +378,7 @@ function MethodsTable({
                 <th className="px-4 py-3 text-left font-medium text-muted-foreground">Conta vinculada</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Taxa %</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Liquidação (dias)</th>
-                <th className="px-4 py-3 text-center font-medium text-muted-foreground">Autorização</th>
+                <th className="px-4 py-3 text-center font-medium text-muted-foreground">Parcelas</th>
                 <th className="px-4 py-3 text-center font-medium text-muted-foreground">Status</th>
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">Ações</th>
               </tr>
@@ -372,17 +400,27 @@ function MethodsTable({
                   <td className="px-4 py-3">
                     <LinkedAccountCell method={m} />
                   </td>
+                  {isCard(m.type) ? (
+                    <td colSpan={2} className="px-4 py-3 text-center">
+                      {m.cardMachine ? (
+                        <TruncatedText text={`Maquininha ${m.cardMachine.name}`} className="max-w-[28ch]" />
+                      ) : (
+                        <span className="text-xs text-destructive">Sem maquininha</span>
+                      )}
+                    </td>
+                  ) : (<>
                   <td className="px-4 py-3 text-center">
                     {m.feePercentage > 0 ? `${m.feePercentage}%` : "-"}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {m.settlementDays > 0 ? `${m.settlementDays}d` : "Imediato"}
                   </td>
+                  </>)}
                   <td className="px-4 py-3 text-center">
-                    {m.requiresAuthorization ? (
-                      <Badge variant="warning">Sim</Badge>
+                    {(m.maxInstallments ?? 1) > 1 ? (
+                      `até ${m.maxInstallments}x`
                     ) : (
-                      <span className="text-muted-foreground">Não</span>
+                      <span className="text-muted-foreground">À vista</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
@@ -458,10 +496,11 @@ function MethodFormDialog({
       type: "CASH",
       feePercentage: 0,
       settlementDays: 0,
+      maxInstallments: 1,
       autoSettle: false,
-      requiresAuthorization: false,
       fiscalCode: "",
       defaultAccountId: "",
+      cardMachineId: "",
       isActive: true,
     },
   });
@@ -481,10 +520,11 @@ function MethodFormDialog({
               type: editing.type,
               feePercentage: editing.feePercentage,
               settlementDays: editing.settlementDays,
+              maxInstallments: editing.maxInstallments ?? 1,
               autoSettle: editing.autoSettle ?? false,
-              requiresAuthorization: editing.requiresAuthorization,
               fiscalCode: editing.fiscalCode ?? "",
               defaultAccountId: editing.defaultAccountId ?? "",
+              cardMachineId: editing.cardMachineId ?? "",
               isActive: editing.isActive,
             }
           : {
@@ -492,10 +532,11 @@ function MethodFormDialog({
               type: "CASH",
               feePercentage: 0,
               settlementDays: 0,
-                              autoSettle: false,
-              requiresAuthorization: false,
-              fiscalCode: "",
+              maxInstallments: 1,
+              autoSettle: false,
+                      fiscalCode: "",
               defaultAccountId: "",
+              cardMachineId: "",
               isActive: true,
             }
       );
@@ -506,17 +547,24 @@ function MethodFormDialog({
 
   const onSubmit = async (data: MethodFormValues) => {
     // Empty selection means "no linked account"
+    const card = isCard(data.type);
     const payload = {
       ...data,
+      // No cartão, taxa, prazo e parcelas são da maquininha — nem vão.
+      feePercentage: card ? undefined : data.feePercentage,
+      settlementDays: card ? undefined : data.settlementDays,
+      // À vista não parcela; o campo nem aparece para esses tipos.
+      maxInstallments: card || IMMEDIATE_TYPES.includes(data.type) ? undefined : data.maxInstallments,
+      cardMachineId: card ? data.cardMachineId : undefined,
       defaultAccountId: data.defaultAccountId || undefined,
     };
     try {
       if (editing) {
         await updateMutation.mutateAsync({ id: editing.id, ...payload });
-        addToast("Metodo atualizado com sucesso!", "success");
+        addToast("Método atualizado com sucesso!", "success");
       } else {
         await createMutation.mutateAsync(payload);
-        addToast("Metodo criado com sucesso!", "success");
+        addToast("Método criado com sucesso!", "success");
       }
       onOpenChange(false);
     } catch (err) {
@@ -579,7 +627,23 @@ function MethodFormDialog({
             </div>
           </div>
 
+          {isCard(type) ? (
+            <Controller
+              name="cardMachineId"
+              control={control}
+              render={({ field }) => (
+                <CardMachineSelect
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  kind={type as "CREDIT_CARD" | "DEBIT_CARD"}
+                  error={errors.cardMachineId?.message}
+                />
+              )}
+            />
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-3">
+            {!isCard(type) && (<>
             <div className="space-y-1">
               <label className="text-sm font-medium">Taxa (%)</label>
               <Input
@@ -604,6 +668,7 @@ function MethodFormDialog({
                   {errors.settlementDays.message}
                 </p> : null}
             </div>
+            </>)}
             <div className="space-y-1">
               <label className="text-sm font-medium">Cód. Fiscal</label>
               <Input
@@ -616,6 +681,29 @@ function MethodFormDialog({
                 </p> : null}
             </div>
           </div>
+
+          {!IMMEDIATE_TYPES.includes(type) && !isCard(type) && (
+            <div className="space-y-1">
+              <label htmlFor="method-max-installments" className="text-sm font-medium">
+                Máximo de parcelas
+              </label>
+              <Input
+                id="method-max-installments"
+                type="number"
+                min={1}
+                max={24}
+                className="sm:w-40"
+                {...register("maxInstallments", { valueAsNumber: true })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Na venda, o vendedor escolhe de 1x até este número. Deixe 1 se esta
+                forma não parcela.
+              </p>
+              {errors.maxInstallments ? <p className="text-xs text-destructive">
+                  {errors.maxInstallments.message}
+                </p> : null}
+            </div>
+          )}
 
           <div className="space-y-1">
             <label className="text-sm font-medium">Conta vinculada{IMMEDIATE_TYPES.includes(type) ? " *" : ""}</label>
@@ -647,19 +735,11 @@ function MethodFormDialog({
               </p>
             ) : null}
             <p className="text-xs text-muted-foreground">
-              Vendas com este metodo serao direcionadas a esta conta.
+              Vendas com este método serão direcionadas a esta conta.
             </p>
           </div>
 
           <div className="flex items-center gap-6">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                {...register("requiresAuthorization")}
-                className="h-4 w-4 rounded border-input"
-              />
-              Exige autorizacao
-            </label>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"

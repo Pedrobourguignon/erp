@@ -91,3 +91,4 @@ export * from './order-adjustment';
 export * from './br-documents';
 export * from './br-fiscal';
 export * from './password';
+export * from './card-receivables';

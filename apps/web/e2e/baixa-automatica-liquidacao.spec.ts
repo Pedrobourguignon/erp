@@ -4,13 +4,13 @@ import {
   createCustomer,
   ensureOpenCashSession,
   ensureSellableProduct,
-  stamp,
+  createCardMethod,
 } from "./fixtures";
 
 /**
  * Prazo de liquidação combinado com a operadora (inclusive o antecipado).
  *
- * O lojista põe, na forma de pagamento, em quantos dias a operadora paga. A venda
+ * O lojista põe, na maquininha, em quantos dias a operadora paga. A venda
  * tem que nascer com o dinheiro nesse dia — e isso se confere em Financeiro, que é
  * a outra tela, não no toast da configuração. A taxa segue a do cadastro.
  */
@@ -42,31 +42,23 @@ test.describe("financeiro: liquidação no prazo combinado", () => {
     const account = ((accounts.body as { data: { id: string }[] }).data ?? [])[0];
     expect(account, "nenhuma conta financeira").toBeTruthy();
 
-    const name = `Cartão liquida em 2 dias ${stamp()}`;
-    const created = await apiClient.post("/payment-methods", {
-      name,
-      type: "CREDIT_CARD",
-      defaultAccountId: account.id,
-      feePercentage: 3,
-      settlementDays: 30,
+    // O prazo do cartão é da maquininha; a baixa automática é do método.
+    const { machine, method } = await createCardMethod(apiClient, {
+      creditRates: [3],
+      creditSettlementDays: 30,
+      method: { defaultAccountId: account.id, autoSettle: true },
     });
-    expect(created.status, JSON.stringify(created.body)).toBe(201);
-    const method = (created.body as { data: { id: string } }).data;
+    const name = method.name;
 
-    // O prazo é cadastrado pela tela.
-    await appPage.goto("/configuracoes/metodos-pagamento");
-    await appPage.getByPlaceholder("Buscar por nome...").fill(name);
-    await appPage.getByRole("button", { name: `Editar ${name}` }).click();
-    await appPage.getByLabel("Liquidação (dias)").fill("2");
-    await appPage.getByLabel("Dar baixa automática no dia da liquidação").check();
+    // O prazo é cadastrado pela tela da maquininha.
+    await appPage.goto("/configuracoes/maquininhas");
+    await appPage.getByRole("button", { name: `Editar ${machine.name}` }).click();
+    await appPage.getByLabel("1º repasse em (dias)").fill("2");
     await appPage.getByRole("button", { name: "Salvar" }).click();
     await expect(appPage.getByRole("dialog")).toBeHidden();
 
-    const saved = await apiClient.get(`/payment-methods/${method.id}`);
-    expect((saved.body as { data: { settlementDays: number; autoSettle: boolean } }).data).toMatchObject({
-      settlementDays: 2,
-      autoSettle: true,
-    });
+    const saved = await apiClient.get(`/card-machines/${machine.id}`);
+    expect((saved.body as { data: { creditSettlementDays: number } }).data.creditSettlementDays).toBe(2);
 
     // A venda de R$ 200 em 1x nasce com o dinheiro daqui a 2 dias, não 30 (o prazo antigo do cadastro).
     const sold = await apiClient.post("/orders", {

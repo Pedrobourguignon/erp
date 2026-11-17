@@ -96,7 +96,9 @@ describe('menu per role', () => {
 
     it('still reaches the payment configuration screens', () => {
       expect(hrefs).toContain('/configuracoes/metodos-pagamento');
-      expect(hrefs).toContain('/configuracoes/condicoes-pagamento');
+      expect(hrefs).toContain('/configuracoes/maquininhas');
+      // As parcelas são escolhidas na venda, até o máximo do método.
+      expect(hrefs).not.toContain('/configuracoes/condicoes-pagamento');
     });
 
     it('does not offer to create an order', () => {

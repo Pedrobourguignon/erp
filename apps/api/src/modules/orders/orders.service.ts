@@ -12,6 +12,7 @@ import { toDateRange } from '../../common/utils/date-range.util';
 import {
   calculateItemTotal,
   calculateOrderTotals,
+  cardMaxInstallments,
   maxItemDiscount,
   roundMoney,
 } from '@erp/validators';
@@ -395,8 +396,9 @@ export class OrdersService {
           id: true,
           name: true,
           type: true,
-          requiresAuthorization: true,
           defaultAccountId: true,
+          maxInstallments: true,
+          cardMachine: { select: { rates: { select: { installments: true } } } },
         },
       });
 
@@ -408,10 +410,10 @@ export class OrdersService {
             `Forma de pagamento ${payment.paymentMethodId} não encontrada`,
           );
         }
-        if (method.requiresAuthorization && !payment.authorizationCode) {
-          throw new BadRequestException(
-            'Código de autorização é obrigatório para pagamentos com cartão',
-          );
+        // The seller types the number of installments; the method caps it.
+        // A legacy payment condition still overrides it below.
+        if (!payment.paymentConditionId) {
+          assertInstallmentsWithinMethod(method, payment.installments ?? 1);
         }
         // Resolve financialAccountId from method default if not provided
         if (!payment.financialAccountId && method.defaultAccountId) {
@@ -810,4 +812,45 @@ export class OrdersService {
 
     return `PED-${nextNumber.toString().padStart(6, '0')}`;
   }
+}
+
+/**
+ * O vendedor digita as parcelas na venda; o método diz até quantas aceita.
+ * A tela já limita, mas a regra vale para qualquer cliente da API.
+ */
+function assertInstallmentsWithinMethod(
+  method: {
+    name: string;
+    type?: string;
+    maxInstallments?: number | null;
+    cardMachine?: { rates: { installments: number }[] } | null;
+  },
+  installments: number,
+): void {
+  const max = effectiveMaxInstallments(method);
+  if (installments <= max) return;
+
+  if (max <= 1) {
+    throw new BadRequestException(
+      `A forma de pagamento "${method.name}" não aceita parcelamento. ` +
+        'Ajuste o máximo de parcelas em Configurações > Métodos de Pagamento.',
+    );
+  }
+  throw new BadRequestException(
+    `A forma de pagamento "${method.name}" aceita no máximo ${max} parcelas ` +
+      `(foram informadas ${installments}).`,
+  );
+}
+
+/** No cartão, o máximo vem da maquininha (débito nunca parcela). */
+function effectiveMaxInstallments(method: {
+  type?: string;
+  maxInstallments?: number | null;
+  cardMachine?: { rates: { installments: number }[] } | null;
+}): number {
+  if (method.type === 'DEBIT_CARD') return 1;
+  if (method.type === 'CREDIT_CARD' && method.cardMachine) {
+    return cardMaxInstallments(method.cardMachine);
+  }
+  return method.maxInstallments ?? 1;
 }

@@ -2,9 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import { InventoryService } from '../../modules/inventory/inventory.service';
-import { PAYMENT_FEE_KIND, settlesAtSale } from '../../common/constants/payment.constants';
+import {
+  PAYMENT_FEE_KIND,
+  isCardMethod,
+  methodSettlesAtSale,
+  settlesAtSale,
+} from '../../common/constants/payment.constants';
 import { fromCents, toCents } from '../../common/utils/money.util';
-import { roundMoney, splitInstallments } from '@erp/validators';
+import {
+  planCardReceivables,
+  roundMoney,
+  splitInstallments,
+  type CardMachineTerms,
+} from '@erp/validators';
 import {
   civilDaysFrom,
   civilInstallmentDueDates,
@@ -333,7 +343,13 @@ export class OrderEventsHandler {
       where: { orderId, tenantId },
       include: {
         paymentMethod: {
-          select: { name: true, type: true, defaultAccountId: true, settlementDays: true },
+          select: {
+            name: true,
+            type: true,
+            defaultAccountId: true,
+            settlementDays: true,
+            cardMachine: { select: { debitSettlementDays: true } },
+          },
         },
       },
     });
@@ -345,7 +361,7 @@ export class OrderEventsHandler {
     const drawerAccountId = await this.resolveDrawerAccountId(tenantId, orderId);
 
     for (const op of orderPayments) {
-      if (!settlesAtSale(op.paymentMethod.type, op.paymentMethod.settlementDays)) continue;
+      if (!methodSettlesAtSale(op.paymentMethod)) continue;
 
       // Para dinheiro vivo a gaveta vence qualquer padrão: a nota está
       // fisicamente ali. A conta do pagamento (que hoje é só uma cópia do
@@ -424,6 +440,7 @@ export class OrderEventsHandler {
             type: true,
             settlementDays: true,
             feePercentage: true,
+            cardMachine: { select: CARD_TERMS_SELECT },
           },
         },
         paymentCondition: { select: { id: true, daysBetweenInstallments: true, entryPercentage: true, type: true } },
@@ -457,6 +474,12 @@ export class OrderEventsHandler {
     const DAY_MS = 24 * 60 * 60 * 1000;
 
     for (const op of orderPayments) {
+      // Card with a machine: rates and terms come from the machine.
+      if (op.paymentMethod.cardMachine && isCardMethod(op.paymentMethod.type)) {
+        await this.createCardReceivables(tenantId, orderId, customerId, orderNumber, op, now);
+        continue;
+      }
+
       const methodType = op.paymentMethod.type;
       const methodName = op.paymentMethod.name;
       const settlementDays = op.paymentMethod.settlementDays ?? null;
@@ -571,6 +594,88 @@ export class OrderEventsHandler {
   }
 
   /**
+   * A card sale, from its machine: one receivable per transfer the acquirer
+   * will make, and the acquirer's cut of each one as its own payable, due the
+   * same day. `planCardReceivables` is the same function the sale screen
+   * previews with.
+   */
+  private async createCardReceivables(
+    tenantId: string,
+    orderId: string,
+    customerId: string | null,
+    orderNumber: string,
+    op: {
+      id: string;
+      amount: unknown;
+      installments: number;
+      paymentMethodId: string;
+      paymentMethod: { name: string; type: string; cardMachine: CardTermsRow | null };
+    },
+    now: Date,
+  ): Promise<void> {
+    const machine = op.paymentMethod.cardMachine!;
+    const kind = op.paymentMethod.type === 'DEBIT_CARD' ? 'DEBIT' : 'CREDIT';
+    const terms = toCardTerms(machine);
+    const plan = planCardReceivables({
+      kind,
+      amount: Number(op.amount),
+      installments: op.installments,
+      terms,
+    });
+    const feePercentage =
+      kind === 'DEBIT'
+        ? terms.debitFeePercentage
+        : (terms.rates.find((r) => r.installments === Math.max(op.installments, 1))
+            ?.feePercentage ?? 0);
+    const methodName = op.paymentMethod.name;
+
+    for (const item of plan) {
+      const dueDate = civilDaysFrom(now, item.dueInDays);
+      const isPaid = kind === 'DEBIT' && item.dueInDays === 0;
+      const label =
+        item.totalInstallments > 1 ? ` (${item.installment}/${item.totalInstallments})` : '';
+
+      await this.prisma.accountsReceivable.create({
+        data: {
+          tenantId,
+          orderId,
+          customerId,
+          orderPaymentId: op.id,
+          paymentMethodId: op.paymentMethodId,
+          description: `${orderNumber} - ${methodName}${label}`,
+          installment: item.installment,
+          totalInstallments: item.totalInstallments,
+          amount: item.amount,
+          status: isPaid ? 'PAID' : 'PENDING',
+          dueDate,
+          paidAt: isPaid ? now : null,
+          paidAmount: isPaid ? item.amount : 0,
+        },
+      });
+
+      if (item.fee > 0) {
+        await this.prisma.accountsPayable.create({
+          data: {
+            tenantId,
+            description: `Taxa ${methodName} - ${orderNumber}${label}`,
+            amount: item.fee,
+            status: 'PENDING',
+            dueDate,
+            paymentMethodId: op.paymentMethodId,
+            metadata: {
+              kind: PAYMENT_FEE_KIND,
+              orderId,
+              orderPaymentId: op.id,
+              feePercentage,
+              installment: item.installment,
+            },
+          },
+        });
+      }
+    }
+  }
+
+  /**
    * The acquirer's fee is a cost of the sale, not a discount on it: the
    * receivable keeps the gross amount and the fee becomes its own payable, so
    * the DRE shows what the card machine costs. One per payment, whatever the
@@ -642,4 +747,35 @@ export class OrderEventsHandler {
       this.logger.warn(`Failed to create notification: ${error.message}`);
     }
   }
+}
+
+/** What the sale needs from the card machine to plan its receivables. */
+export const CARD_TERMS_SELECT = {
+  debitFeePercentage: true,
+  debitSettlementDays: true,
+  creditReceiveMode: true,
+  creditSettlementDays: true,
+  rates: { select: { installments: true, feePercentage: true } },
+} as const;
+
+type CardTermsRow = {
+  debitFeePercentage: unknown;
+  debitSettlementDays: number;
+  creditReceiveMode: string;
+  creditSettlementDays: number;
+  rates: { installments: number; feePercentage: unknown }[];
+};
+
+/** Prisma hands back Decimals; the plan works with plain numbers. */
+function toCardTerms(machine: CardTermsRow): CardMachineTerms {
+  return {
+    debitFeePercentage: Number(machine.debitFeePercentage) || 0,
+    debitSettlementDays: machine.debitSettlementDays,
+    creditReceiveMode: machine.creditReceiveMode === 'ANTICIPATED' ? 'ANTICIPATED' : 'FLOW',
+    creditSettlementDays: machine.creditSettlementDays,
+    rates: machine.rates.map((r) => ({
+      installments: r.installments,
+      feePercentage: Number(r.feePercentage) || 0,
+    })),
+  };
 }

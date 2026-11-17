@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsNumber,
+  IsInt,
   IsIn,
   IsArray,
   ValidateNested,
@@ -67,8 +68,8 @@ export class CreateOrderPaymentDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsNumber()
-  @Min(1)
+  @IsInt({ message: 'O número de parcelas precisa ser inteiro' })
+  @Min(1, { message: 'O número de parcelas é pelo menos 1' })
   installments?: number;
 
   @ApiPropertyOptional()

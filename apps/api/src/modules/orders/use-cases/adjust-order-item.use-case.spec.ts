@@ -574,6 +574,30 @@ describe('AdjustOrderItemUseCase', () => {
       expect(result.settled).toBe(false);
     });
 
+    // O prazo do cartão vem da maquininha, não do que sobrou no método.
+    it('débito cuja maquininha repassa em D+1 deixa o título em aberto', async () => {
+      prisma.order.findFirst.mockResolvedValue(makeOrder());
+      primeProduct(130);
+      prisma.paymentMethod.findFirst.mockResolvedValue({
+        id: 'pm-db',
+        name: 'Débito Stone',
+        type: 'DEBIT_CARD',
+        settlementDays: 0,
+        defaultAccountId: 'acc-bank',
+        cardMachine: { debitSettlementDays: 1 },
+      });
+
+      const result = await useCase.execute(TENANT_A, ORDER_ID, USER_ID, {
+        orderItemId: 'item-1',
+        quantity: 1,
+        replacement: { productId: 'prod-new' },
+        settlement: { paymentMethodId: 'pm-db' },
+      });
+
+      expect(settlements.settleWithin).not.toHaveBeenCalled();
+      expect(result.settled).toBe(false);
+    });
+
     it('recusa forma de pagamento de outro tenant', async () => {
       prisma.order.findFirst.mockResolvedValue(makeOrder());
       prisma.paymentMethod.findFirst.mockResolvedValue(null);

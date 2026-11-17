@@ -80,14 +80,14 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { title: "Geral", href: "/configuracoes", permission: "settings:read" },
       {
-        title: "Cond. Pagamento",
-        href: "/configuracoes/condicoes-pagamento",
-        permission: "financial:create",
-      },
-      {
         title: "Métodos Pagamento",
         href: "/configuracoes/metodos-pagamento",
         permission: "financial:create",
+      },
+      {
+        title: "Maquininhas",
+        href: "/configuracoes/maquininhas",
+        permission: "financial:read",
       },
     ],
   },

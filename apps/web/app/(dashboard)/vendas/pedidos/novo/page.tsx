@@ -131,25 +131,12 @@ const orderItemSchema = z
 const orderPaymentSchema = z
   .object({
     paymentMethodId: z.string().min(1, "Selecione a forma de pagamento"),
-    paymentConditionId: z.string().optional(),
     financialAccountId: z.string().optional(),
     amount: z.preprocess(coerceNumber, z.number().min(0.01, "Valor obrigatório")),
     installments: z.number().optional(),
-    authorizationCode: z.string().optional(),
-    // Both set by PaymentLine from the selected method: the schema has no
-    // access to the method list. `requiresAuthorization` drives the rule below;
-    // `methodType` tells cash apart, the only kind that accepts change (VD-08).
-    requiresAuthorization: z.boolean().optional(),
+    // Set by PaymentLine from the selected method: the schema has no access to
+    // the method list. Cash is the only kind that accepts change (VD-08).
     methodType: z.string().optional(),
-  })
-  .superRefine((payment, ctx) => {
-    if (payment.requiresAuthorization && !payment.authorizationCode?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["authorizationCode"],
-        message: "Código de autorização obrigatório",
-      });
-    }
   });
 
 /** Totals of the cart, with the API's own arithmetic. */
@@ -456,11 +443,9 @@ export default function NewOrderPage() {
         // the change is not revenue and must not become a receivable.
         payments: data.payments.map((p, index) => ({
           paymentMethodId: p.paymentMethodId,
-          paymentConditionId: p.paymentConditionId || undefined,
           financialAccountId: p.financialAccountId || undefined,
           amount: settlement.applied[index],
           installments: p.installments || undefined,
-          authorizationCode: p.authorizationCode || undefined,
         })),
         shippingMethod: data.shippingMethod || undefined,
         shippingCost: data.shippingCost,

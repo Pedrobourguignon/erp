@@ -258,6 +258,12 @@ enum PaymentMethodType {
   OTHER
 }
 
+/// Como a maquininha repassa o crédito: parcela a parcela ou tudo de uma vez.
+enum CardReceiveMode {
+  FLOW
+  ANTICIPATED
+}
+
 enum PaymentConditionType {
   CASH
   INSTALLMENT
@@ -354,6 +360,7 @@ model Tenant {
   chartOfAccounts        ChartOfAccounts[]
   auditLogs              AuditLog[]
   paymentMethods         PaymentMethod[]
+  cardMachines           CardMachine[]
   paymentConditions      PaymentCondition[]
   orderPayments          OrderPayment[]
   orderAdjustments       OrderAdjustment[]
@@ -1322,8 +1329,15 @@ model PaymentMethod {
 
   defaultAccountId      String?
   defaultAccount        FinancialAccount? @relation(fields: [defaultAccountId], references: [id])
+  /// Taxa e prazo valem só para quem não é cartão; o cartão usa a maquininha.
   feePercentage         Decimal?          @db.Decimal(5, 2)
   settlementDays        Int?
+  /// Até quantas parcelas o vendedor pode digitar na venda (1 = não parcela).
+  /// No cartão, o máximo vem da tabela de taxas da maquininha.
+  maxInstallments       Int               @default(1)
+  /// Obrigatória para crédito e débito: dela vêm taxas, prazos e parcelas.
+  cardMachineId         String?
+  cardMachine           CardMachine?      @relation(fields: [cardMachineId], references: [id])
   /// Baixa os títulos desta forma sozinho, no dia do vencimento.
   autoSettle            Boolean           @default(false)
   requiresAuthorization Boolean           @default(false)
@@ -1338,7 +1352,51 @@ model PaymentMethod {
   paymentConditions PaymentCondition[]
 
   @@index([tenantId])
+  @@index([cardMachineId])
   @@map("payment_methods")
+}
+
+/// A maquininha (o contrato com a operadora): taxas e prazos do débito e do
+/// crédito. Duas máquinas físicas do mesmo contrato são um cadastro só.
+model CardMachine {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name     String  @db.VarChar(100)
+  /// Operadora (Stone, Cielo, InfinitePay…), texto livre.
+  provider String? @db.VarChar(50)
+
+  debitFeePercentage   Decimal         @default(0) @db.Decimal(5, 2)
+  /// 0 = o dinheiro do débito está na conta no momento da venda.
+  debitSettlementDays  Int             @default(1)
+  creditReceiveMode    CardReceiveMode @default(FLOW)
+  /// Dias até o 1º repasse (FLOW) ou até o repasse total (ANTICIPATED).
+  creditSettlementDays Int             @default(30)
+  isActive             Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rates          CardMachineRate[]
+  paymentMethods PaymentMethod[]
+
+  @@index([tenantId])
+  @@map("card_machines")
+}
+
+/// Taxa total do crédito para cada número de parcelas (já inclui a antecipação,
+/// quando a maquininha antecipa). O máximo de parcelas é a maior linha.
+model CardMachineRate {
+  id            String      @id @default(cuid())
+  cardMachineId String
+  cardMachine   CardMachine @relation(fields: [cardMachineId], references: [id], onDelete: Cascade)
+
+  installments  Int
+  feePercentage Decimal @db.Decimal(5, 2)
+
+  @@unique([cardMachineId, installments])
+  @@map("card_machine_rates")
 }
 
 /// Condições de pagamento

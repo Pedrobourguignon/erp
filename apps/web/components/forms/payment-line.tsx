@@ -1,13 +1,12 @@
 "use client";
 
-import { splitInstallments } from "@erp/validators";
+import { CARD_INSTALLMENT_INTERVAL_DAYS, splitInstallments } from "@erp/validators";
 import { Trash2, AlertTriangle } from "lucide-react";
 import React from "react";
 import { Controller, type Control, type UseFormSetValue, type FieldValues } from "react-hook-form";
 
 import { MoneyInput } from "@/components/forms/money-input";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectTrigger,
@@ -16,9 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
-import type { PaymentCondition } from "@/hooks/use-payment-conditions";
 import type { PaymentMethod } from "@/hooks/use-payment-methods";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, pluralize } from "@/lib/utils";
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -27,44 +25,34 @@ interface PaymentLineProps {
   control: Control<FieldValues>;
   setValue: UseFormSetValue<FieldValues>;
   methods: PaymentMethod[];
-  conditions: PaymentCondition[];
-  /** Drives the installment preview — the condition decides how many there are. */
-  selectedCondition?: PaymentCondition;
+  selectedMethod?: PaymentMethod;
+  /** Parcelas escolhidas na linha (o método diz até quantas aceita). */
+  installments: number;
   amount: number;
   selectedMethodType: string | null;
-  requiresAuthorization: boolean;
-  showCondition: boolean;
-  authorizationError?: string;
   missingAccount?: boolean;
   onRemove: () => void;
 }
 
-// ─── Condition-showing types ───────────────────────────────────────────
+// ─── Installments typed on the sale ────────────────────────────────────
 
-const CONDITION_TYPES = new Set([
-  "CREDIT_CARD",
-  "BOLETO",
-  "BANK_TRANSFER",
-]);
-
-export function shouldShowCondition(type: string | null): boolean {
-  return type !== null && CONDITION_TYPES.has(type);
+/** 1x até o máximo do método; vazio quando o método não parcela. */
+export function installmentChoices(method: PaymentMethod | undefined): number[] {
+  const max = method?.maxInstallments ?? 1;
+  if (max <= 1) {return [];}
+  return Array.from({ length: max }, (_, i) => i + 1);
 }
 
-// ─── Method-scoped conditions (SCRUM-52) ───────────────────────────────
-
 /**
- * A condition with no linked methods keeps the pre-SCRUM-52 behavior: it
- * shows up for any method that displays a condition. Linking narrows it.
+ * Ao trocar o método, as parcelas já escolhidas só seguem se o novo método
+ * aceitar — senão voltam a 1x, em vez de mandar à API um número que ela recusa.
  */
-export function filterConditionsForMethod(
-  conditions: PaymentCondition[],
-  methodId: string | undefined
-): PaymentCondition[] {
-  if (!methodId) {return conditions;}
-  return conditions.filter(
-    (c) => c.paymentMethodIds.length === 0 || c.paymentMethodIds.includes(methodId)
-  );
+export function fitInstallments(
+  current: number | undefined,
+  method: PaymentMethod | undefined
+): number {
+  const value = current && current > 0 ? current : 1;
+  return value <= (method?.maxInstallments ?? 1) ? value : 1;
 }
 
 // ─── Linked account (SCRUM-30) ─────────────────────────────────────────
@@ -116,29 +104,54 @@ export function hasMissingAccount(
  * Shows exactly the receivables the API will create — same split function,
  * `splitInstallments` from `@erp/validators`.
  */
+/** Como o dinheiro chega: da maquininha, no cartão; senão, uma por mês. */
+export interface InstallmentReceipt {
+  mode: "FLOW" | "ANTICIPATED";
+  /** Dias até o 1º repasse (no fluxo) ou até o valor inteiro (antecipado). */
+  firstDays: number;
+}
+
+const MONTHLY: InstallmentReceipt = { mode: "FLOW", firstDays: CARD_INSTALLMENT_INTERVAL_DAYS };
+
 export function InstallmentPreview({
-  condition,
+  installments,
   amount,
+  receipt = MONTHLY,
 }: {
-  condition?: PaymentCondition;
+  installments: number;
   amount: number;
+  receipt?: InstallmentReceipt;
 }) {
-  if (!condition || condition.installments <= 1 || amount <= 0) {
+  if (installments <= 1 || amount <= 0) {
     return null;
   }
 
-  const parts = splitInstallments(amount, condition.installments);
-  const days = condition.daysBetweenInstallments || 30;
-  const dueDays = parts.map((_, i) => (i + 1) * days).join("/");
+  const parts = splitInstallments(amount, installments);
+  // Mesmos prazos que a API usa para gerar os títulos.
+  const when =
+    receipt.mode === "ANTICIPATED"
+      ? `cai tudo ${receipt.firstDays === 0 ? "na hora" : `em ${pluralize(receipt.firstDays, "dia", "dias")}`}`
+      : `vencimentos em ${parts
+          .map((_, i) => receipt.firstDays + i * CARD_INSTALLMENT_INTERVAL_DAYS)
+          .join("/")} dias`;
 
   return (
     <p className="text-xs text-muted-foreground">
-      {condition.installments}x de {formatCurrency(parts[0])}
+      {installments}x de {formatCurrency(parts[0])}
       {parts[parts.length - 1] !== parts[0] &&
         ` (última de ${formatCurrency(parts[parts.length - 1])})`}{" "}
-      &middot; vencimentos em {dueDays} dias
+      &middot; {when}
     </p>
   );
+}
+
+function receiptOf(method: PaymentMethod | undefined): InstallmentReceipt | undefined {
+  const machine = method?.cardMachine;
+  if (!machine || method?.type !== "CREDIT_CARD") {return undefined;}
+  return {
+    mode: machine.creditReceiveMode,
+    firstDays: machine.creditSettlementDays ?? CARD_INSTALLMENT_INTERVAL_DAYS,
+  };
 }
 
 // ─── Component ─────────────────────────────────────────────────────────
@@ -148,23 +161,23 @@ export function PaymentLine({
   control,
   setValue,
   methods,
-  conditions,
-  selectedCondition,
+  selectedMethod,
+  installments,
   amount,
   selectedMethodType,
-  requiresAuthorization,
-  showCondition,
-  authorizationError,
   missingAccount,
   onRemove,
 }: PaymentLineProps) {
+  const choices = installmentChoices(selectedMethod);
+
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 rounded-lg border bg-muted/20 p-3 dark:bg-muted/10 sm:flex-row sm:items-end",
+        "space-y-2 rounded-lg border bg-muted/20 p-3 dark:bg-muted/10",
         missingAccount && "border-amber-400 dark:border-amber-700"
       )}
     >
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
       {/* Payment Method */}
       <div className="min-w-0 flex-1 space-y-1">
         <label className="text-xs font-medium text-muted-foreground">
@@ -185,18 +198,15 @@ export function PaymentLine({
                     method.defaultAccountId
                   );
                 }
-                // Track whether this method requires an authorization code so the
-                // form schema can make the field conditionally required.
-                setValue(
-                  `payments.${index}.requiresAuthorization`,
-                  method?.requiresAuthorization ?? false,
-                  { shouldValidate: true }
-                );
                 // VD-08: only cash may be handed over above the total, and the
                 // schema has no access to the method list — it reads this.
                 setValue(`payments.${index}.methodType`, method?.type ?? "", {
                   shouldValidate: true,
                 });
+                setValue(
+                  `payments.${index}.installments`,
+                  fitInstallments(installments, method)
+                );
               }}
             >
               <SelectTrigger className="h-9">
@@ -225,68 +235,44 @@ export function PaymentLine({
           </p> : null}
       </div>
 
-      {/* Payment Condition */}
-      {showCondition ? <div className="min-w-0 flex-1 space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">
-            Condicao
+      {/* Installments — o vendedor escolhe, até o máximo do método */}
+      {choices.length > 0 ? <div className="w-full space-y-1 sm:w-32">
+          <label
+            htmlFor={`payment-${index}-installments`}
+            className="text-xs font-medium text-muted-foreground"
+          >
+            Parcelas
           </label>
           <Controller
-            name={`payments.${index}.paymentConditionId`}
+            name={`payments.${index}.installments`}
             control={control}
             render={({ field }) => (
               <Select
-                value={String(field.value ?? "")}
-                onValueChange={field.onChange}
+                value={String(field.value ?? 1)}
+                onValueChange={(val) => field.onChange(Number(val))}
               >
-                <SelectTrigger className="h-9">
-                  <SelectValue placeholder="Selecione..." />
+                <SelectTrigger id={`payment-${index}-installments`} className="h-9">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {conditions.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                      {c.installments > 1 ? ` (${c.installments}x)` : ""}
+                  {choices.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n === 1 ? "À vista (1x)" : `${n}x`}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             )}
           />
-          <InstallmentPreview condition={selectedCondition} amount={amount} />
         </div> : null}
 
       {/* Amount */}
-      <div className={cn("space-y-1", showCondition ? "w-full sm:w-36" : "w-full sm:w-44")}>
+      <div className="w-full space-y-1 sm:w-40">
         <label className="text-xs font-medium text-muted-foreground">
           {selectedMethodType === "CASH" ? "Valor Recebido" : "Valor"}
         </label>
         <MoneyInput name={`payments.${index}.amount`} control={control} />
       </div>
-
-      {/* Authorization Code */}
-      {requiresAuthorization ? <div className="w-full space-y-1 sm:w-36">
-          <label className="text-xs font-medium text-muted-foreground">
-            Cod. Autorizacao
-          </label>
-          <Controller
-            name={`payments.${index}.authorizationCode`}
-            control={control}
-            render={({ field }) => (
-              <Input
-                {...field}
-                value={String(field.value ?? "")}
-                placeholder="000000"
-                maxLength={50}
-                className={cn(
-                  "h-9",
-                  authorizationError &&
-                    "border-destructive focus-visible:ring-destructive"
-                )}
-              />
-            )}
-          />
-          {authorizationError ? <p className="text-xs text-destructive">{authorizationError}</p> : null}
-        </div> : null}
 
       {/* Remove */}
       <Tooltip content="Remover pagamento">
@@ -301,6 +287,14 @@ export function PaymentLine({
           <Trash2 className="h-4 w-4" />
         </Button>
       </Tooltip>
+    </div>
+    {choices.length > 0 && (
+      <InstallmentPreview
+        installments={installments}
+        amount={amount}
+        receipt={receiptOf(selectedMethod)}
+      />
+    )}
     </div>
   );
 }

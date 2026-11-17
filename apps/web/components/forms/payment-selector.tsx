@@ -11,7 +11,6 @@ import {
 } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { usePaymentConditions } from "@/hooks/use-payment-conditions";
 import { usePaymentMethods } from "@/hooks/use-payment-methods";
 import { isPermissionError } from "@/lib/api-errors";
 import {
@@ -23,10 +22,8 @@ import { formatCurrency, cn } from "@/lib/utils";
 
 import {
   PaymentLine,
-  shouldShowCondition,
   requiresLinkedAccount,
   hasMissingAccount,
-  filterConditionsForMethod,
 } from "./payment-line";
 
 
@@ -61,24 +58,17 @@ export function PaymentSelector({
   const payments = useWatch({ control, name: "payments" }) as
     | Array<{
         paymentMethodId: string;
-        paymentConditionId?: string;
         financialAccountId?: string;
         amount: number;
         installments?: number;
-        authorizationCode?: string;
       }>
     | undefined;
 
   const { data: methodsData, error: methodsError } = usePaymentMethods();
-  const { data: conditionsData } = usePaymentConditions();
 
   const methods = useMemo(
     () => (methodsData?.data ?? []).filter((m) => m.isActive),
     [methodsData]
-  );
-  const conditions = useMemo(
-    () => (conditionsData?.data ?? []).filter((c) => c.isActive),
-    [conditionsData]
   );
 
   const methodTypeById = useMemo(
@@ -113,23 +103,6 @@ export function PaymentSelector({
     }
   }, [fields.length, totalAmount, payments, setValue, methodTypeById]);
 
-  // SCRUM-52: trocar o método pode invalidar a condição já escolhida (ela
-  // ficou vinculada a outro método). O Select já mostra em branco nesse caso
-  // — sem isto o valor antigo ficaria escondido no form e seguiria junto no
-  // submit.
-  useEffect(() => {
-    (payments ?? []).forEach((payment, index) => {
-      if (!payment?.paymentConditionId) {return;}
-      const stillValid = filterConditionsForMethod(
-        conditions,
-        payment.paymentMethodId
-      ).some((c) => c.id === payment.paymentConditionId);
-      if (!stillValid) {
-        setValue(`payments.${index}.paymentConditionId` as never, "" as never);
-      }
-    });
-  }, [payments, conditions, setValue]);
-
   const missingAccount = hasMissingAccount(payments, methods);
 
   useEffect(() => {
@@ -142,15 +115,13 @@ export function PaymentSelector({
     totalAmount > 0 ? Math.min((paymentTotal / totalAmount) * 100, 100) : 0;
 
   const handleAdd = () => {
-    // VD-05: no `installments` here on purpose. The number of installments is a
-    // property of the payment condition, and sending a hard-coded 1 made the API
-    // skip the condition's own value — "3x sem juros" became a single title.
+    // VD-05: the installments field is the source of truth now — the seller
+    // picks it on the line and the API checks it against the method's maximum.
     append({
       paymentMethodId: "",
-      paymentConditionId: "",
       financialAccountId: "",
+      installments: 1,
       amount: fields.length === 0 ? totalAmount : 0,
-      authorizationCode: "",
     });
   };
 
@@ -187,16 +158,6 @@ export function PaymentSelector({
               (m) => m.id === payment?.paymentMethodId
             );
             const methodType = selectedMethod?.type ?? null;
-            const lineConditions = filterConditionsForMethod(
-              conditions,
-              selectedMethod?.id
-            );
-            const lineError = (
-              errors as unknown as
-                | Array<{ authorizationCode?: { message?: string } }>
-                | undefined
-            )?.[index];
-
             const lineMissingAccount =
               requiresLinkedAccount(methodType) &&
               !(payment?.financialAccountId || selectedMethod?.defaultAccountId);
@@ -208,17 +169,10 @@ export function PaymentSelector({
                 control={control as Control<Record<string, unknown>>}
                 setValue={setValue}
                 methods={methods}
-                conditions={lineConditions}
-                selectedCondition={conditions.find(
-                  (c) => c.id === payment?.paymentConditionId
-                )}
+                selectedMethod={selectedMethod}
+                installments={Number(payment?.installments) || 1}
                 amount={Number(payment?.amount) || 0}
                 selectedMethodType={methodType}
-                requiresAuthorization={
-                  selectedMethod?.requiresAuthorization ?? false
-                }
-                showCondition={shouldShowCondition(methodType)}
-                authorizationError={lineError?.authorizationCode?.message}
                 missingAccount={lineMissingAccount}
                 onRemove={() => remove(index)}
               />

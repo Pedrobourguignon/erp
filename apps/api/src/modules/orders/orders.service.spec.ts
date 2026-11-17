@@ -891,6 +891,87 @@ describe('OrdersService', () => {
     });
 
     // ─── SCRUM-30: payment method must resolve to a financial account ─────────
+    // O vendedor digita as parcelas; a condição de pagamento saiu da venda.
+    describe('installments typed on the sale', () => {
+      // createDto totals 250
+      const card = {
+        id: 'pm-credit',
+        name: 'Cartão de Crédito',
+        type: 'CREDIT_CARD',
+        requiresAuthorization: false,
+        defaultAccountId: null,
+        // No cartão o máximo vem da maquininha; a coluna do método fica em 1.
+        maxInstallments: 1,
+        cardMachine: {
+          rates: [1, 2, 3, 4, 5, 6].map((installments) => ({ installments })),
+        },
+      };
+      const payWith = (method: Record<string, unknown>, payment: Record<string, unknown> = {}) => {
+        prisma.paymentMethod.findMany.mockResolvedValue([method]);
+        return {
+          ...createDto,
+          payments: [{ paymentMethodId: method.id, amount: 250, ...payment }],
+        };
+      };
+
+      it('keeps the number of installments the seller typed', async () => {
+        await service.create(TENANT_ID, USER_ID, payWith(card, { installments: 3 }) as any);
+
+        const rows = prisma.orderPayment.createMany.mock.calls[0][0].data;
+        expect(rows[0].installments).toBe(3);
+      });
+
+      it('accepts exactly the maximum of the method', async () => {
+        await service.create(TENANT_ID, USER_ID, payWith(card, { installments: 6 }) as any);
+
+        const rows = prisma.orderPayment.createMany.mock.calls[0][0].data;
+        expect(rows[0].installments).toBe(6);
+      });
+
+      // "Exige autorização" saiu da tela; um método que ficou com a flag no
+      // banco não pode travar a venda num campo que ninguém mais vê.
+      it('sells without an authorization code even if the method still has the old flag', async () => {
+        await service.create(
+          TENANT_ID,
+          USER_ID,
+          payWith({ ...card, requiresAuthorization: true }) as any,
+        );
+
+        expect(prisma.order.create).toHaveBeenCalled();
+      });
+
+      it('defaults to a single installment when none is sent', async () => {
+        await service.create(TENANT_ID, USER_ID, payWith(card) as any);
+
+        const rows = prisma.orderPayment.createMany.mock.calls[0][0].data;
+        expect(rows[0].installments).toBe(1);
+      });
+
+      it('refuses more installments than the method allows, naming the method and the limit', async () => {
+        const dto = payWith(card, { installments: 7 });
+
+        await expect(service.create(TENANT_ID, USER_ID, dto as any)).rejects.toThrow(
+          'A forma de pagamento "Cartão de Crédito" aceita no máximo 6 parcelas',
+        );
+        expect(prisma.order.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses installments on a method that is not split (max 1)', async () => {
+        const pix = {
+          id: 'pm-pix',
+          name: 'PIX',
+          type: 'PIX',
+          requiresAuthorization: false,
+          defaultAccountId: 'acc-001',
+          maxInstallments: 1,
+        };
+
+        await expect(
+          service.create(TENANT_ID, USER_ID, payWith(pix, { installments: 2 }) as any),
+        ).rejects.toThrow('"PIX" não aceita parcelamento');
+      });
+    });
+
     describe('payment method without a linked financial account', () => {
       // createDto totals 250 (245 - 10 discount + 15 shipping)
       const payWith = (method: Record<string, unknown>, payment: Record<string, unknown> = {}) => {
