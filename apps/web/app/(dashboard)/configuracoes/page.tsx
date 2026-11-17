@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Users, CreditCard } from "lucide-react";
+import { Building2, Users, CreditCard, Receipt } from "lucide-react";
 import React, { useState } from "react";
 
 import { RequirePermission } from "@/components/auth/require-permission";
@@ -8,12 +8,14 @@ import { cn } from "@/lib/utils";
 
 import { CompanyTab } from "./_components/company-tab";
 import { PlanTab } from "./_components/plan-tab";
+import { ReceiptSettingsTab } from "./_components/receipt-settings-tab";
 import { UsersTab } from "./_components/users-tab";
 
 // ─── Tabs ───────────────────────────────────────────────────────────────
 
 const tabs = [
   { id: "empresa", label: "Empresa", icon: Building2 },
+  { id: "recibo", label: "Recibo", icon: Receipt },
   { id: "usuarios", label: "Usuários", icon: Users },
   { id: "plano", label: "Plano", icon: CreditCard },
 ] as const;
@@ -52,6 +54,7 @@ function SettingsPageContent() {
       </div>
 
       {activeTab === "empresa" && <CompanyTab />}
+      {activeTab === "recibo" && <ReceiptSettingsTab />}
       {activeTab === "usuarios" && <UsersTab />}
       {activeTab === "plano" && <PlanTab />}
     </div>

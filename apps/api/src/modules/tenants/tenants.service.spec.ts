@@ -202,6 +202,31 @@ describe('TenantsService', () => {
       expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
     });
 
+    // Recibo do cliente: o lojista escolhe o formato da impressora e o rodapé.
+    it('saves the receipt format and footer', async () => {
+      prisma.tenant.findUnique.mockResolvedValue(makeTenant());
+      prisma.tenant.update.mockResolvedValue(makeTenant());
+
+      await service.update(TENANT_ID, {
+        receiptFormat: 'THERMAL_58',
+        receiptFooter: 'Trocas em até 30 dias com este recibo.',
+      });
+
+      const { data, select } = prisma.tenant.update.mock.calls[0][0];
+      expect(data.receiptFormat).toBe('THERMAL_58');
+      expect(data.receiptFooter).toBe('Trocas em até 30 dias com este recibo.');
+      expect(select).toMatchObject({ receiptFormat: true, receiptFooter: true });
+    });
+
+    it('clears the receipt footer when it is sent empty', async () => {
+      prisma.tenant.findUnique.mockResolvedValue(makeTenant());
+      prisma.tenant.update.mockResolvedValue(makeTenant());
+
+      await service.update(TENANT_ID, { receiptFooter: '   ' });
+
+      expect(prisma.tenant.update.mock.calls[0][0].data.receiptFooter).toBeNull();
+    });
+
     it('should update address fields', async () => {
       prisma.tenant.findUnique.mockResolvedValue(makeTenant());
       prisma.tenant.update.mockResolvedValue(makeTenant({

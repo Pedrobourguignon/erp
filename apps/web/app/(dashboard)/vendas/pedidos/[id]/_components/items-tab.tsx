@@ -168,7 +168,7 @@ export function ItemsTab({
 
       {order.adjustments?.length ? (
         <CardContent className="border-t pt-6">
-          <AdjustmentsList adjustments={order.adjustments} />
+          <AdjustmentsList orderId={order.id} adjustments={order.adjustments} />
         </CardContent>
       ) : null}
 

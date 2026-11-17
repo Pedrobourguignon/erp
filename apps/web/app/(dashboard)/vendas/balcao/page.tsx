@@ -49,7 +49,7 @@ import { useInvalidSubmit } from "@/hooks/use-invalid-submit";
 import { useCreateOrder } from "@/hooks/use-orders";
 import api, { getApiErrorMessage } from "@/lib/api";
 import { scheduleScrollToFirstError } from "@/lib/form-errors";
-import { settlePayments } from "@/lib/payment-settlement";
+import { settlePayments, tenderedAmounts } from "@/lib/payment-settlement";
 import {
   fetchAvailableStock,
   refreshCartStock,
@@ -522,6 +522,13 @@ export default function CounterSalePage() {
     }
 
     const settlement = counterSaleSettlement(data);
+    const tendered = tenderedAmounts(
+      data.payments.map((p) => ({
+        amount: coerceNumber(p.amount) as number,
+        isCash: p.methodType === "CASH",
+      })),
+      settlement
+    );
     try {
       const result = await createOrder.mutateAsync({
         customerId: data.customerId || undefined,
@@ -538,6 +545,8 @@ export default function CounterSalePage() {
           paymentMethodId: p.paymentMethodId,
           financialAccountId: p.financialAccountId || undefined,
           amount: settlement.applied[index],
+          // Only what was handed over beyond the charge: the receipt prints the change.
+          amountTendered: tendered[index],
           installments: p.installments || undefined,
         })),
         shippingCost: 0,

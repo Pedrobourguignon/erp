@@ -66,6 +66,13 @@ export class CreateOrderPaymentDto {
   @Min(0.01, { message: 'Payment amount must be greater than zero' })
   amount: number;
 
+  /** Cash only: what the customer handed over. The change goes on the receipt. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'O valor recebido precisa ser um valor em reais' })
+  @Min(0.01, { message: 'O valor recebido precisa ser maior que zero' })
+  amountTendered?: number;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt({ message: 'O número de parcelas precisa ser inteiro' })

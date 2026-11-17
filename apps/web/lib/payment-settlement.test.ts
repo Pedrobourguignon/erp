@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { hasLineWithoutMethod, settlePayments } from "./payment-settlement";
+import { hasLineWithoutMethod, settlePayments, tenderedAmounts } from "./payment-settlement";
 
 const cash = (amount: number) => ({ amount, isCash: true });
 const card = (amount: number) => ({ amount, isCash: false });
@@ -58,6 +58,27 @@ describe("settlePayments", () => {
 
   it("should treat an empty payment list as unsettled", () => {
     expect(settlePayments([], 199.8).isSettled).toBe(false);
+  });
+});
+
+// Recibo: o troco só sai no papel se a API souber quanto o cliente entregou.
+describe("tenderedAmounts", () => {
+  it("reports what was handed over on the cash line that gave change", () => {
+    const payments = [cash(300)];
+
+    expect(tenderedAmounts(payments, settlePayments(payments, 250))).toEqual([300]);
+  });
+
+  it("reports nothing on an exact cash payment", () => {
+    const payments = [cash(250)];
+
+    expect(tenderedAmounts(payments, settlePayments(payments, 250))).toEqual([undefined]);
+  });
+
+  it("never reports it on a non-cash line", () => {
+    const payments = [card(100), cash(200)];
+
+    expect(tenderedAmounts(payments, settlePayments(payments, 250))).toEqual([undefined, 200]);
   });
 });
 

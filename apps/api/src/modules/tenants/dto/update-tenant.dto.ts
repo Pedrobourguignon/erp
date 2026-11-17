@@ -6,6 +6,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { RECEIPT_FOOTER_MAX_LENGTH, RECEIPT_FORMATS } from '@erp/constants';
 
 export class UpdateTenantDto {
   @ApiPropertyOptional()
@@ -77,4 +78,17 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsIn(['SIMPLES_NACIONAL', 'LUCRO_PRESUMIDO', 'LUCRO_REAL', 'MEI'])
   taxRegime?: string;
+
+  @ApiPropertyOptional({ enum: RECEIPT_FORMATS })
+  @IsOptional()
+  @IsIn(RECEIPT_FORMATS, { message: 'Formato de recibo inválido' })
+  receiptFormat?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(RECEIPT_FOOTER_MAX_LENGTH, {
+    message: `O rodapé do recibo tem no máximo ${RECEIPT_FOOTER_MAX_LENGTH} caracteres`,
+  })
+  receiptFooter?: string;
 }

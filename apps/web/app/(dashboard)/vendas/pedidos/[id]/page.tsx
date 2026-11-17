@@ -13,6 +13,7 @@ import { useParams, useRouter } from "next/navigation";
 import React, { useState } from "react";
 
 import { StatusActions } from "@/components/orders/status-actions";
+import { PrintReceiptButton } from "@/components/receipts/print-receipt-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -94,13 +95,17 @@ export default function OrderDetailPage() {
           </div>
         </div>
 
-        <StatusActions
-          orderId={orderId}
-          orderNumber={order.orderNumber}
-          allowedTransitions={order.allowedTransitions}
-          origin={order.origin}
-          status={order.status}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Pedido cancelado não tem recibo: não houve venda a comprovar. */}
+          {order.status !== "CANCELLED" && <PrintReceiptButton orderId={orderId} />}
+          <StatusActions
+            orderId={orderId}
+            orderNumber={order.orderNumber}
+            allowedTransitions={order.allowedTransitions}
+            origin={order.origin}
+            status={order.status}
+          />
+        </div>
       </div>
 
       {/* Summary cards */}

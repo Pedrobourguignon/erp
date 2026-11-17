@@ -68,6 +68,21 @@ export function settlePayments(
 }
 
 /**
+ * What the customer handed over on each cash line that gave change, so the
+ * receipt can print "Recebido R$ 300,00 · Troco R$ 50,00". Exact payments and
+ * non-cash lines report nothing: there is no change to explain.
+ */
+export function tenderedAmounts(
+  payments: PaymentDraft[],
+  settlement: Pick<PaymentSettlement, "applied">
+): (number | undefined)[] {
+  return payments.map((payment, index) => {
+    const received = roundMoney(payment.amount);
+    return payment.isCash && received > settlement.applied[index] ? received : undefined;
+  });
+}
+
+/**
  * A line the seller added but never gave a method to still carries the amount
  * the form pre-filled, so the totals read "Pagamento completo" for a sale that
  * has no way of being paid. The progress bar must not celebrate it.

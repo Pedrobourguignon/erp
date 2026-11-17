@@ -16,6 +16,7 @@ import React, { useCallback, useState } from "react";
 import { SearchableSelectBase } from "@/components/forms/searchable-select";
 import { ListPageHeader } from "@/components/layouts/list-page-header";
 import { StatusActions } from "@/components/orders/status-actions";
+import { PrintReceiptButton } from "@/components/receipts/print-receipt-button";
 import {
   DataTable,
   type ColumnDef,
@@ -173,6 +174,8 @@ function QuickActions({ order }: { order: OrderListItem }) {
           <Eye className="h-4 w-4" />
         </Button>
       </Tooltip>
+      {/* Pedido cancelado não tem recibo: não houve venda a comprovar. */}
+      {order.status !== "CANCELLED" && <PrintReceiptButton orderId={order.id} iconOnly />}
       {/* VD-02: the row used to offer "Enviar" for CONFIRMED and PICKING, both
           rejected by the API. The available actions now come from the API. */}
       <StatusActions

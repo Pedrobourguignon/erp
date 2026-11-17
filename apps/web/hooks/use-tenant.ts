@@ -1,3 +1,4 @@
+import type { ReceiptFormat } from "@erp/constants";
 import type { ApiResponse } from "@erp/shared-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -27,6 +28,8 @@ export interface Tenant {
   addressCity: string | null;
   addressState: string | null;
   addressZipCode: string | null;
+  receiptFormat: ReceiptFormat;
+  receiptFooter: string | null;
 }
 
 export interface TenantUsageLimit {
@@ -58,8 +61,9 @@ export type UpdateTenantPayload = Partial<
     | "addressCity"
     | "addressState"
     | "addressZipCode"
+    | "receiptFormat"
   >
->;
+> & { receiptFooter?: string };
 
 // ─── Query keys ────────────────────────────────────────────────────────
 

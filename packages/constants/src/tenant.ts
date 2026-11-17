@@ -48,3 +48,25 @@ export const TAX_REGIME_OPTIONS = TAX_REGIMES.map((value) => ({
   value,
   label: TAX_REGIME_LABELS[value],
 }));
+
+/**
+ * Paper the store's printer uses for the customer receipt. The store picks it
+ * in Configurações › Geral; the print page lays out the receipt for it.
+ */
+export const RECEIPT_FORMATS = ['THERMAL_80', 'THERMAL_58', 'A4'] as const;
+
+export type ReceiptFormat = (typeof RECEIPT_FORMATS)[number];
+
+export const RECEIPT_FORMAT_LABELS: Record<ReceiptFormat, string> = {
+  THERMAL_80: 'Térmica 80 mm',
+  THERMAL_58: 'Térmica 58 mm',
+  A4: 'Folha A4',
+};
+
+export const RECEIPT_FORMAT_OPTIONS = RECEIPT_FORMATS.map((value) => ({
+  value,
+  label: RECEIPT_FORMAT_LABELS[value],
+}));
+
+/** Matches the `receiptFooter` column. */
+export const RECEIPT_FOOTER_MAX_LENGTH = 300;

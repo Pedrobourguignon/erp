@@ -288,3 +288,89 @@ export interface JwtPayload {
   roleId: string;
   email: string;
 }
+
+// ─── Recibo do cliente (não fiscal) ─────────────────────────────────────
+// Prontos para o papel: a API já devolve os textos e o documento mascarado,
+// e nada além do que vai impresso (sem custo, sem IDs internos).
+
+export type ReceiptFormat = 'THERMAL_80' | 'THERMAL_58' | 'A4';
+
+export interface ReceiptStore {
+  name: string;
+  /** CNPJ formatado. */
+  document: string;
+  phone: string | null;
+  /** Uma linha: "Rua X, 123 - Centro - São Paulo/SP - CEP 01000-000". */
+  address: string | null;
+}
+
+export interface ReceiptCustomer {
+  name: string;
+  /** "CPF ***.456.789-**" ou "CNPJ 12.345.678/0001-90"; null sem documento. */
+  document: string | null;
+}
+
+/** O que vale para todo recibo: cabeçalho, via e rodapé. */
+export interface ReceiptHeader {
+  format: ReceiptFormat;
+  footer: string | null;
+  /** 1 = original; 2 em diante = reimpressão ("2ª VIA"). */
+  copy: number;
+  printedAt: string;
+  store: ReceiptStore;
+  orderNumber: string;
+  customer: ReceiptCustomer | null;
+}
+
+export interface SaleReceiptItem {
+  name: string;
+  sku: string;
+  quantity: number;
+  unitPrice: number;
+  discount: number;
+  total: number;
+}
+
+export interface SaleReceiptPayment {
+  method: string;
+  amount: number;
+  installments: number;
+  /** Valor de cada parcela, como a venda dividiu (ex.: [33.34, 33.33, 33.33]). */
+  installmentValues: number[];
+  /** Só no dinheiro com troco. */
+  tendered: number | null;
+  change: number | null;
+}
+
+export interface SaleReceipt extends ReceiptHeader {
+  kind: 'SALE';
+  soldAt: string;
+  seller: string | null;
+  cashRegister: string | null;
+  items: SaleReceiptItem[];
+  subtotal: number;
+  discount: number;
+  shippingCost: number;
+  total: number;
+  payments: SaleReceiptPayment[];
+}
+
+export interface ExchangeReceiptItem {
+  name: string;
+  sku: string;
+  quantity: number;
+  value: number;
+}
+
+export interface ExchangeReceipt extends ReceiptHeader {
+  kind: 'EXCHANGE' | 'RETURN';
+  adjustedAt: string;
+  returned: ExchangeReceiptItem;
+  /** Só na troca. */
+  received: ExchangeReceiptItem | null;
+  /** > 0: o cliente pagou a diferença. < 0: a loja devolveu. */
+  difference: number;
+  /** Parte da devolução abatida de parcelas em aberto do pedido. */
+  abatedAmount: number;
+  reason: string | null;
+}

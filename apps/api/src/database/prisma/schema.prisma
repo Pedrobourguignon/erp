@@ -150,6 +150,13 @@ enum InvoiceStatus {
   CORRECTED
 }
 
+/// Papel da impressora do recibo do cliente.
+enum ReceiptFormat {
+  THERMAL_80
+  THERMAL_58
+  A4
+}
+
 enum TaxRegime {
   SIMPLES_NACIONAL
   LUCRO_PRESUMIDO
@@ -308,6 +315,11 @@ model Tenant {
   plan      TenantPlan   @default(TRIAL)
   status    TenantStatus @default(ACTIVE)
   taxRegime TaxRegime    @default(SIMPLES_NACIONAL)
+
+  // Recibo do cliente (não fiscal)
+  receiptFormat ReceiptFormat @default(THERMAL_80)
+  /// Texto livre no fim do recibo (ex.: política de troca).
+  receiptFooter String?       @db.VarChar(300)
 
   // Limites do plano
   maxUsers      Int @default(5)
@@ -920,6 +932,9 @@ model Order {
   cancelledAt  DateTime?
   cancelReason String?
 
+  /// Quantas vezes o recibo foi impresso; da 2ª em diante sai "2ª VIA".
+  receiptPrintCount Int @default(0)
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -1031,6 +1046,9 @@ model OrderAdjustment {
   reason      String?  @db.VarChar(500)
   createdById String
   createdAt   DateTime @default(now())
+
+  /// Vias impressas do comprovante da troca/devolução.
+  receiptPrintCount Int @default(0)
 
   @@index([tenantId, orderId])
   @@map("order_adjustments")
@@ -1443,6 +1461,9 @@ model OrderPayment {
   financialAccount   FinancialAccount? @relation(fields: [financialAccountId], references: [id])
 
   amount            Decimal @db.Decimal(15, 2)
+  /// Só no dinheiro: quanto o cliente entregou. O troco é `amountTendered - amount`
+  /// e nunca é receita (VD-08); fica gravado para o recibo.
+  amountTendered    Decimal? @db.Decimal(15, 2)
   installments      Int     @default(1)
   authorizationCode String? @db.VarChar(50)
   notes             String? @db.VarChar(500)

@@ -37,7 +37,7 @@ import {
   OrderCancelledEvent,
   OrderCounterSaleEvent,
 } from '../../events/event-types';
-import { formatBRL } from '../../common/utils/money.util';
+import { formatBRL, toCents } from '../../common/utils/money.util';
 
 @Injectable()
 export class OrdersService {
@@ -415,6 +415,7 @@ export class OrdersService {
         if (!payment.paymentConditionId) {
           assertInstallmentsWithinMethod(method, payment.installments ?? 1);
         }
+        assertTenderedAmount(method, payment);
         // Resolve financialAccountId from method default if not provided
         if (!payment.financialAccountId && method.defaultAccountId) {
           payment.financialAccountId = method.defaultAccountId;
@@ -511,6 +512,7 @@ export class OrdersService {
             paymentConditionId: p.paymentConditionId || null,
             financialAccountId: p.financialAccountId || null,
             amount: p.amount,
+            amountTendered: p.amountTendered ?? null,
             installments: p.installments ?? 1,
             authorizationCode: p.authorizationCode || null,
           })),
@@ -854,3 +856,26 @@ function effectiveMaxInstallments(method: {
   }
   return method.maxInstallments ?? 1;
 }
+
+/**
+ * What the customer handed over only makes sense in cash, and never below what
+ * the sale charges: the receipt prints the difference as change.
+ */
+function assertTenderedAmount(
+  method: { name: string; type: string },
+  payment: { amount: number; amountTendered?: number },
+): void {
+  if (payment.amountTendered === undefined || payment.amountTendered === null) {return;}
+  if (method.type !== 'CASH') {
+    throw new BadRequestException(
+      `Só pagamento em dinheiro tem troco ("${method.name}" não é dinheiro)`,
+    );
+  }
+  if (toCents(payment.amountTendered) < toCents(payment.amount)) {
+    throw new BadRequestException(
+      `O valor recebido em "${method.name}" (${formatBRL(payment.amountTendered)}) ` +
+        `é menor que o cobrado (${formatBRL(payment.amount)})`,
+    );
+  }
+}
+

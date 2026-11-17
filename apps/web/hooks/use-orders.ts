@@ -301,6 +301,8 @@ export interface CreateOrderPaymentPayload {
   paymentConditionId?: string;
   financialAccountId?: string;
   amount: number;
+  /** Cash only: what the customer handed over, when it gave change. */
+  amountTendered?: number;
   installments?: number;
   authorizationCode?: string;
 }

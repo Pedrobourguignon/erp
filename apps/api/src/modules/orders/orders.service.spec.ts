@@ -972,6 +972,58 @@ describe('OrdersService', () => {
       });
     });
 
+    // Recibo: "Recebido R$ 300,00 · Troco R$ 50,00" precisa do valor que o
+    // cliente entregou. O valor cobrado continua sendo o da venda.
+    describe('cash handed over (change on the receipt)', () => {
+      // createDto totals 250
+      const cash = {
+        id: 'pm-cash',
+        name: 'Dinheiro',
+        type: 'CASH',
+        defaultAccountId: 'acc-001',
+        maxInstallments: 1,
+      };
+      const payWith = (method: Record<string, unknown>, payment: Record<string, unknown>) => {
+        prisma.paymentMethod.findMany.mockResolvedValue([method]);
+        return {
+          ...createDto,
+          payments: [{ paymentMethodId: method.id, amount: 250, ...payment }],
+        };
+      };
+
+      it('keeps what the customer handed over next to what was charged', async () => {
+        await service.create(TENANT_ID, USER_ID, payWith(cash, { amountTendered: 300 }) as any);
+
+        const rows = prisma.orderPayment.createMany.mock.calls[0][0].data;
+        expect(rows[0].amount).toBe(250);
+        expect(rows[0].amountTendered).toBe(300);
+      });
+
+      it('stores nothing when the seller did not type the amount handed over', async () => {
+        await service.create(TENANT_ID, USER_ID, payWith(cash, {}) as any);
+
+        const rows = prisma.orderPayment.createMany.mock.calls[0][0].data;
+        expect(rows[0].amountTendered).toBeNull();
+      });
+
+      it('refuses an amount handed over below the amount charged', async () => {
+        await expect(
+          service.create(TENANT_ID, USER_ID, payWith(cash, { amountTendered: 200 }) as any),
+        ).rejects.toThrow(
+          // formatBRL separa "R$" do número com um espaço não separável.
+          /O valor recebido em "Dinheiro" \(R\$\s200,00\) é menor que o cobrado \(R\$\s250,00\)/,
+        );
+      });
+
+      it('refuses an amount handed over on a method that is not cash', async () => {
+        const pix = { ...cash, id: 'pm-pix', name: 'PIX', type: 'PIX' };
+
+        await expect(
+          service.create(TENANT_ID, USER_ID, payWith(pix, { amountTendered: 300 }) as any),
+        ).rejects.toThrow('Só pagamento em dinheiro tem troco ("PIX" não é dinheiro)');
+      });
+    });
+
     describe('payment method without a linked financial account', () => {
       // createDto totals 250 (245 - 10 discount + 15 shipping)
       const payWith = (method: Record<string, unknown>, payment: Record<string, unknown> = {}) => {

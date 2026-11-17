@@ -1,10 +1,12 @@
 import type { OrderAdjustment } from "@erp/shared-types";
 import { ArrowRight, ArrowRightLeft, PackageX } from "lucide-react";
 
+import { PrintReceiptButton } from "@/components/receipts/print-receipt-button";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
 
 type AdjustmentsListProps = {
+  orderId: string;
   adjustments: OrderAdjustment[];
 };
 
@@ -12,20 +14,20 @@ type AdjustmentsListProps = {
  * Memória do que foi vendido originalmente: depois de uma troca a linha do
  * pedido mostra o que o cliente levou, e só este registro diz o que ele devolveu.
  */
-export function AdjustmentsList({ adjustments }: AdjustmentsListProps) {
+export function AdjustmentsList({ orderId, adjustments }: AdjustmentsListProps) {
   return (
     <section aria-labelledby="adjustments-title" className="space-y-3">
       <h3 id="adjustments-title" className="text-sm font-semibold">Trocas e devoluções</h3>
       <ul className="divide-y rounded-lg border">
         {adjustments.map((a) => (
-          <AdjustmentRow key={a.id} adjustment={a} />
+          <AdjustmentRow key={a.id} orderId={orderId} adjustment={a} />
         ))}
       </ul>
     </section>
   );
 }
 
-function AdjustmentRow({ adjustment: a }: { adjustment: OrderAdjustment }) {
+function AdjustmentRow({ orderId, adjustment: a }: { orderId: string; adjustment: OrderAdjustment }) {
   const difference = Number(a.difference);
   const Icon = a.type === "RETURN" ? PackageX : ArrowRightLeft;
 
@@ -52,6 +54,7 @@ function AdjustmentRow({ adjustment: a }: { adjustment: OrderAdjustment }) {
           </p>
         </div>
       </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
       <span
         className={cn(
           "shrink-0 whitespace-nowrap font-medium tabular-nums",
@@ -66,6 +69,8 @@ function AdjustmentRow({ adjustment: a }: { adjustment: OrderAdjustment }) {
             ? `Loja devolveu ${formatCurrency(-difference)}`
             : "Sem diferença"}
       </span>
+      <PrintReceiptButton orderId={orderId} adjustmentId={a.id} label="Imprimir comprovante" size="sm" />
+      </div>
     </li>
   );
 }

@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { TaxRegime } from '@prisma/client';
+import { ReceiptFormat, TaxRegime } from '@prisma/client';
 import { onlyDigits } from '@erp/validators';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import {
@@ -89,6 +89,8 @@ export class TenantsService {
         addressCity: true,
         addressState: true,
         addressZipCode: true,
+        receiptFormat: true,
+        receiptFooter: true,
         trialEndsAt: true,
         createdAt: true,
         updatedAt: true,
@@ -141,6 +143,13 @@ export class TenantsService {
         ...(dto.addressState !== undefined && { addressState: dto.addressState }),
         ...(dto.addressZipCode !== undefined && { addressZipCode: dto.addressZipCode }),
         ...(dto.taxRegime !== undefined && { taxRegime: dto.taxRegime as TaxRegime }),
+        ...(dto.receiptFormat !== undefined && {
+          receiptFormat: dto.receiptFormat as ReceiptFormat,
+        }),
+        // An empty footer means "no footer", not a line of blanks on paper.
+        ...(dto.receiptFooter !== undefined && {
+          receiptFooter: dto.receiptFooter.trim() || null,
+        }),
       },
       select: {
         id: true,
@@ -158,6 +167,8 @@ export class TenantsService {
         addressCity: true,
         addressState: true,
         addressZipCode: true,
+        receiptFormat: true,
+        receiptFooter: true,
         updatedAt: true,
       },
     });
