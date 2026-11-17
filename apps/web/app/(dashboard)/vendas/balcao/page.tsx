@@ -1,6 +1,6 @@
 "use client";
 
-import type { PaginatedResponse } from "@erp/shared-types";
+import type { PaginatedResponse, SaleCandidate } from "@erp/shared-types";
 import {
   calculateItemTotal,
   calculateOrderTotals,
@@ -31,6 +31,8 @@ import {
   SearchableSelectBase,
   type SelectOption,
 } from "@/components/forms/searchable-select";
+import { ScanNoticeBar } from "@/components/sales/scan-notice";
+import { VariantPickerDialog } from "@/components/sales/variant-picker-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -44,10 +46,12 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/components/ui/truncated-text";
+import { useCartScanner } from "@/hooks/use-cart-scanner";
 import { useCashRegisterSessions } from "@/hooks/use-cash-registers";
 import { useInvalidSubmit } from "@/hooks/use-invalid-submit";
 import { useCreateOrder } from "@/hooks/use-orders";
 import api, { getApiErrorMessage } from "@/lib/api";
+import { placeInCart, splitVariantName } from "@/lib/counter-cart";
 import { scheduleScrollToFirstError } from "@/lib/form-errors";
 import { settlePayments, tenderedAmounts } from "@/lib/payment-settlement";
 import {
@@ -77,7 +81,9 @@ interface ProductResult {
   id: string;
   name: string;
   sku: string;
+  ean?: string | null;
   salePrice: number;
+  _count?: { variants?: number };
   inventory?: {
     totalQuantity: number;
     totalReserved: number;
@@ -98,6 +104,8 @@ const coerceNumber = (val: unknown) => {
 const counterSaleItemSchema = z
   .object({
     productId: z.string().min(1, "Selecione um produto"),
+    // A variação (tamanho/cor) que saiu: o estoque baixa dela, não do produto.
+    variantId: z.string().nullable().optional(),
     productName: z.string(),
     sku: z.string(),
     availableStock: z.number(),
@@ -445,31 +453,35 @@ export default function CounterSalePage() {
 
   // ─── Add product ─────────────────────────────────────────────────
 
-  const addProductToOrder = useCallback(
-    (product: ProductResult) => {
-      const available = product.inventory?.totalAvailable ?? 0;
-      const existingIndex = items.findIndex(
-        (item) => item.productId === product.id
-      );
-      if (existingIndex >= 0) {
-        const current = items[existingIndex];
-        setValue(`items.${existingIndex}.quantity`, current.quantity + 1);
-        // VD-18: o mesmo produto lido duas vezes no leitor soma quantidade. O
-        // seletor já limpa a busca e devolve o foco (`keepOpenOnSelect`).
-        return;
+  /** Linha que acabou de entrar ou somar: pisca para o operador ver onde foi. */
+  const [lastAdded, setLastAdded] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = useCallback((key: string) => {
+    setLastAdded(key);
+    if (flashTimer.current) {clearTimeout(flashTimer.current);}
+    flashTimer.current = setTimeout(() => setLastAdded(null), 1200);
+  }, []);
+  useEffect(() => () => {
+    if (flashTimer.current) {clearTimeout(flashTimer.current);}
+  }, []);
+
+  const addCandidate = useCallback(
+    (candidate: SaleCandidate) => {
+      // VD-18: o mesmo produto (e variação) lido duas vezes soma quantidade;
+      // outro tamanho do mesmo produto é outra linha, com o seu estoque.
+      const placement = placeInCart(items, candidate);
+      if (placement.kind === "increment") {
+        setValue(`items.${placement.index}.quantity`, placement.quantity);
+      } else {
+        append(placement.line);
       }
-      append({
-        productId: product.id,
-        productName: product.name,
-        sku: product.sku,
-        availableStock: available,
-        quantity: 1,
-        unitPrice: Number(product.salePrice),
-        discount: 0,
-      });
+      flash(`${candidate.productId}:${candidate.variantId ?? ""}`);
     },
-    [items, append, setValue]
+    [items, append, setValue, flash]
   );
+
+  // Leitor de código de barras: lê em qualquer campo da tela, pela busca exata.
+  const scanner = useCartScanner({ onCandidate: addCandidate });
 
   /**
    * O seletor devolve um id; o carrinho precisa do produto.
@@ -480,11 +492,24 @@ export default function CounterSalePage() {
   const handlePickProduct = useCallback(
     (productId: string) => {
       const product = productsById.current.get(productId);
-      if (product) {
-        addProductToOrder(product);
+      if (!product) {return;}
+      // Produto com variações não entra como "pai" (sem estoque, R$ 0,00):
+      // pergunta o tamanho/cor primeiro.
+      if ((product._count?.variants ?? 0) > 0) {
+        void scanner.pickProduct(product.id);
+        return;
       }
+      addCandidate({
+        productId: product.id,
+        variantId: null,
+        name: product.name,
+        sku: product.sku,
+        ean: product.ean ?? null,
+        salePrice: Number(product.salePrice),
+        available: product.inventory?.totalAvailable ?? 0,
+      });
     },
-    [addProductToOrder]
+    [addCandidate, scanner]
   );
 
   // ─── Submit ───────────────────────────────────────────────────────
@@ -503,6 +528,7 @@ export default function CounterSalePage() {
     const stock = await refreshCartStock(
       data.items.map((item) => ({
         productId: item.productId,
+        variantId: item.variantId,
         quantity: Number(item.quantity) || 0,
         productName: item.productName,
       }))
@@ -535,6 +561,7 @@ export default function CounterSalePage() {
         origin: "BALCAO",
         items: data.items.map((item) => ({
           productId: item.productId,
+          variantId: item.variantId || undefined,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           discount: item.discount,
@@ -661,6 +688,9 @@ export default function CounterSalePage() {
                     emptyMessage="Nenhum produto encontrado"
                   />
                 </div>
+                <div className="mt-2">
+                  <ScanNoticeBar notice={scanner.notice} onDismiss={scanner.dismissNotice} />
+                </div>
               </CardContent>
             </Card>
 
@@ -728,17 +758,27 @@ export default function CounterSalePage() {
                           return (
                             <tr
                               key={field.id}
+                              data-flash={lastAdded === `${item?.productId}:${item?.variantId ?? ""}` || undefined}
                               className={cn(
-                                "border-b last:border-0",
-                                overStock && "bg-red-50 dark:bg-red-950/20"
+                                "border-b transition-colors duration-700 last:border-0",
+                                overStock && "bg-red-50 dark:bg-red-950/20",
+                                lastAdded === `${item?.productId}:${item?.variantId ?? ""}` &&
+                                  "bg-emerald-50 dark:bg-emerald-950/30"
                               )}
                             >
                               <td className="px-2 py-3">
                                 <TruncatedText
                                   as="p"
-                                  text={item?.productName}
+                                  text={splitVariantName(item?.productName ?? "").base}
                                   className="max-w-[18ch] font-medium"
                                 />
+                                {/* O tamanho/cor nunca vai para o "…": é o que o
+                                    vendedor confere na etiqueta. */}
+                                {item?.variantId && splitVariantName(item.productName).variant ? (
+                                  <span className="mt-0.5 inline-block max-w-full break-all rounded bg-muted px-1.5 py-0.5 text-xs font-semibold">
+                                    {splitVariantName(item.productName).variant}
+                                  </span>
+                                ) : null}
                                 <TruncatedText
                                   as="p"
                                   text={item?.sku}
@@ -777,7 +817,8 @@ export default function CounterSalePage() {
                                     onBlur={async (event) => {
                                       await quantityField.onBlur(event);
                                       const fresh = await fetchAvailableStock(
-                                        item.productId
+                                        item.productId,
+                                        item.variantId
                                       );
                                       if (fresh !== null) {
                                         setValue(
@@ -1062,6 +1103,7 @@ export default function CounterSalePage() {
                     ["F4", "Selecionar cliente"],
                     ["F9", "Finalizar venda"],
                     ["Esc", "Limpar busca"],
+                    ["Leitor", "lê em qualquer campo"],
                   ].map(([key, description]) => (
                     <React.Fragment key={key}>
                       <dt>
@@ -1073,11 +1115,25 @@ export default function CounterSalePage() {
                     </React.Fragment>
                   ))}
                 </dl>
+                <label className="mt-2 hidden items-center gap-2 text-[11px] text-muted-foreground sm:flex">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5"
+                    checked={scanner.soundOn}
+                    onChange={(e) => scanner.setSoundOn(e.target.checked)}
+                  />
+                  Som do leitor
+                </label>
               </CardContent>
             </Card>
           </div>
         </div>
       </form>
+      <VariantPickerDialog
+        picker={scanner.picker}
+        onPick={scanner.pickVariant}
+        onClose={scanner.closePicker}
+      />
     </div>
   );
 }

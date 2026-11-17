@@ -40,6 +40,35 @@ describe("fetchAvailableStock", () => {
   });
 });
 
+// Leitor no balcão: a linha da camiseta M confere o estoque da M, não a soma
+// de todos os tamanhos do produto.
+describe("fetchAvailableStock — variant", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads the stock of the variant in the cart", async () => {
+    mockedApi.get.mockResolvedValueOnce({
+      data: { data: { kind: "MATCH", item: { available: 2 } } },
+    });
+
+    await expect(fetchAvailableStock("p1", "v1")).resolves.toBe(2);
+    expect(mockedApi.get).toHaveBeenCalledWith("/products/lookup", {
+      params: { productId: "p1", variantId: "v1" },
+    });
+  });
+
+  it("passes the variant of each cart line along", async () => {
+    mockedApi.get.mockResolvedValueOnce({
+      data: { data: { kind: "MATCH", item: { available: 0 } } },
+    });
+
+    const result = await refreshCartStock([
+      { productId: "p1", variantId: "v1", quantity: 1, productName: "Camiseta — M" },
+    ]);
+
+    expect(result.insufficient).toEqual([{ productName: "Camiseta — M", quantity: 1, available: 0 }]);
+  });
+});
+
 describe("refreshCartStock", () => {
   beforeEach(() => vi.clearAllMocks());
 

@@ -1,6 +1,7 @@
 import type { ApiResponse } from "@erp/shared-types";
 
 import api from "@/lib/api";
+import { lookupForSale } from "@/lib/product-lookup";
 
 /**
  * VD-21: `availableStock` in the cart is a snapshot taken when the product was
@@ -14,8 +15,18 @@ interface ProductWithInventory {
 }
 
 export async function fetchAvailableStock(
-  productId: string
+  productId: string,
+  variantId?: string | null
 ): Promise<number | null> {
+  if (variantId) {
+    // A size/colour has its own stock: the product total would lie.
+    try {
+      const result = await lookupForSale(productId, variantId);
+      return result.kind === "MATCH" ? result.item.available : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const { data } = await api.get<ApiResponse<ProductWithInventory>>(
       `/products/${productId}`
@@ -34,6 +45,7 @@ export async function fetchAvailableStock(
 
 export interface CartStockItem {
   productId: string;
+  variantId?: string | null;
   quantity: number;
   productName?: string;
 }
@@ -49,7 +61,7 @@ export async function refreshCartStock(
   items: CartStockItem[]
 ): Promise<StockRefreshResult> {
   const available = await Promise.all(
-    items.map((item) => fetchAvailableStock(item.productId))
+    items.map((item) => fetchAvailableStock(item.productId, item.variantId))
   );
 
   const insufficient = items.flatMap((item, index) => {

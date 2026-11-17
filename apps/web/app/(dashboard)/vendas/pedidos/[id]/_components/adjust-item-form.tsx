@@ -70,7 +70,7 @@ export function AdjustItemForm({ order, item, mode, onDone }: AdjustItemFormProp
       }),
     [item, order, mode, sessionRequiredFor]
   );
-  const { register, control, handleSubmit, watch, formState: { errors } } = useForm<AdjustItemValues>({
+  const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<AdjustItemValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       mode, quantity: item.quantity, productId: "", variantId: "", reason: "",
@@ -116,6 +116,11 @@ export function AdjustItemForm({ order, item, mode, onDone }: AdjustItemFormProp
           variantId={variantId}
           excludeVariantId={mode === "size" ? item.variantId : null}
           onPriceChange={setNewUnitPrice}
+          soldProductId={item.productId}
+          onScanTarget={(target) => {
+            if (mode === "product") {setValue("productId", target.productId, { shouldValidate: true });}
+            setValue("variantId", target.variantId, { shouldValidate: true });
+          }}
         />
       ) : null}
 

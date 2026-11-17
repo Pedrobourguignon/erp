@@ -105,6 +105,8 @@ export interface AlertListParams {
 
 export interface CreateMovementPayload {
   productId: string;
+  /** Tamanho/cor: o saldo de um produto com variações é por variação. */
+  variantId?: string;
   /** Required for ENTRY movements (destination). */
   toWarehouseId?: string;
   /** Required for EXIT movements (source). */
@@ -118,6 +120,8 @@ export interface CreateMovementPayload {
 
 export interface TransferStockPayload {
   productId: string;
+  /** Tamanho/cor: o saldo de um produto com variações é por variação. */
+  variantId?: string;
   fromWarehouseId: string;
   toWarehouseId: string;
   quantity: number;
@@ -132,6 +136,8 @@ export interface TransferStockPayload {
  */
 export interface AdjustStockPayload {
   productId: string;
+  /** Tamanho/cor: o saldo de um produto com variações é por variação. */
+  variantId?: string;
   warehouseId: string;
   countedQuantity: number;
   reason: "COUNT" | "DAMAGE" | "THEFT" | "ADJUSTMENT";

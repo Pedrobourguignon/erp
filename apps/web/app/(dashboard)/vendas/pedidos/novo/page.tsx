@@ -1,6 +1,6 @@
 "use client";
 
-import type { PaginatedResponse } from "@erp/shared-types";
+import type { PaginatedResponse, SaleCandidate } from "@erp/shared-types";
 import {
   calculateItemTotal,
   calculateOrderTotals,
@@ -19,7 +19,7 @@ import {
   Plus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { z } from "zod";
 
@@ -31,16 +31,20 @@ import {
   SearchableSelectBase,
   type SelectOption,
 } from "@/components/forms/searchable-select";
+import { ScanNoticeBar } from "@/components/sales/scan-notice";
+import { VariantPickerDialog } from "@/components/sales/variant-picker-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/components/ui/truncated-text";
+import { useCartScanner } from "@/hooks/use-cart-scanner";
 import { useCashRegisterSessions } from "@/hooks/use-cash-registers";
 import { useInvalidSubmit } from "@/hooks/use-invalid-submit";
 import { useCreateOrder } from "@/hooks/use-orders";
 import api, { getApiErrorMessage } from "@/lib/api";
+import { placeInCart, splitVariantName } from "@/lib/counter-cart";
 import { scheduleScrollToFirstError } from "@/lib/form-errors";
 import { settlePayments } from "@/lib/payment-settlement";
 import {
@@ -65,7 +69,9 @@ interface ProductResult {
   id: string;
   name: string;
   sku: string;
+  ean?: string | null;
   salePrice: number;
+  _count?: { variants?: number };
   inventory?: {
     totalQuantity: number;
     totalReserved: number;
@@ -93,6 +99,8 @@ const PRODUCT_PAGE_SIZE = 20;
 const orderItemSchema = z
   .object({
     productId: z.string().min(1, "Selecione um produto"),
+    // A variação (tamanho/cor): o estoque reservado é o dela, não o do produto.
+    variantId: z.string().nullable().optional(),
     productName: z.string(),
     sku: z.string(),
     availableStock: z.number(),
@@ -358,29 +366,31 @@ export default function NewOrderPage() {
 
   // ─── Add / update product ─────────────────────────────────────────
 
-  const addProductToOrder = useCallback(
-    (product: ProductResult) => {
-      const available = product.inventory?.totalAvailable ?? 0;
-      const existingIndex = items.findIndex(
-        (item) => item.productId === product.id
-      );
-      if (existingIndex >= 0) {
-        const current = items[existingIndex];
-        setValue(`items.${existingIndex}.quantity`, current.quantity + 1);
-        return;
+  /** Linha que acabou de entrar ou somar: pisca para o operador ver onde foi. */
+  const [lastAdded, setLastAdded] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current) {clearTimeout(flashTimer.current);}
+  }, []);
+
+  const addCandidate = useCallback(
+    (candidate: SaleCandidate) => {
+      // O mesmo produto (e variação) soma quantidade; outro tamanho é outra linha.
+      const placement = placeInCart(items, candidate);
+      if (placement.kind === "increment") {
+        setValue(`items.${placement.index}.quantity`, placement.quantity);
+      } else {
+        append(placement.line);
       }
-      append({
-        productId: product.id,
-        productName: product.name,
-        sku: product.sku,
-        availableStock: available,
-        quantity: 1,
-        unitPrice: Number(product.salePrice),
-        discount: 0,
-      });
+      setLastAdded(`${candidate.productId}:${candidate.variantId ?? ""}`);
+      if (flashTimer.current) {clearTimeout(flashTimer.current);}
+      flashTimer.current = setTimeout(() => setLastAdded(null), 1200);
     },
     [items, append, setValue]
   );
+
+  // Leitor de código de barras: lê em qualquer campo da tela, pela busca exata.
+  const scanner = useCartScanner({ onCandidate: addCandidate });
 
   /**
    * O que o seletor devolve é um id; o pedido precisa do produto.
@@ -391,11 +401,23 @@ export default function NewOrderPage() {
   const handlePickProduct = useCallback(
     (productId: string) => {
       const product = productsById.current.get(productId);
-      if (product) {
-        addProductToOrder(product);
+      if (!product) {return;}
+      // Produto com variações pergunta o tamanho/cor antes de entrar.
+      if ((product._count?.variants ?? 0) > 0) {
+        void scanner.pickProduct(product.id);
+        return;
       }
+      addCandidate({
+        productId: product.id,
+        variantId: null,
+        name: product.name,
+        sku: product.sku,
+        ean: product.ean ?? null,
+        salePrice: Number(product.salePrice),
+        available: product.inventory?.totalAvailable ?? 0,
+      });
     },
-    [addProductToOrder]
+    [addCandidate, scanner]
   );
 
   // ─── Submit ───────────────────────────────────────────────────────
@@ -410,6 +432,7 @@ export default function NewOrderPage() {
     const stock = await refreshCartStock(
       data.items.map((item) => ({
         productId: item.productId,
+        variantId: item.variantId,
         quantity: Number(item.quantity) || 0,
         productName: item.productName,
       }))
@@ -435,6 +458,7 @@ export default function NewOrderPage() {
         origin: "MANUAL",
         items: data.items.map((item) => ({
           productId: item.productId,
+          variantId: item.variantId || undefined,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           discount: item.discount,
@@ -539,6 +563,9 @@ export default function NewOrderPage() {
                   placeholder="Buscar produto por nome, SKU ou código de barras..."
                   emptyMessage="Nenhum produto encontrado"
                 />
+                <div className="mt-2">
+                  <ScanNoticeBar notice={scanner.notice} onDismiss={scanner.dismissNotice} />
+                </div>
               </CardContent>
             </Card>
 
@@ -613,17 +640,24 @@ export default function NewOrderPage() {
                             <tr
                               key={field.id}
                               className={cn(
-                                "border-b last:border-0",
-                                overStock && "bg-amber-50 dark:bg-amber-950/20"
+                                "border-b transition-colors duration-700 last:border-0",
+                                overStock && "bg-amber-50 dark:bg-amber-950/20",
+                                lastAdded === `${item?.productId}:${item?.variantId ?? ""}` &&
+                                  "bg-emerald-50 dark:bg-emerald-950/30"
                               )}
                             >
                               {/* Product */}
                               <td className="px-4 py-3">
                                 <TruncatedText
                                   as="p"
-                                  text={item?.productName}
+                                  text={splitVariantName(item?.productName ?? "").base}
                                   className="max-w-[24ch] font-medium"
                                 />
+                                {item?.variantId && splitVariantName(item.productName).variant ? (
+                                  <span className="mt-0.5 inline-block max-w-full break-all rounded bg-muted px-1.5 py-0.5 text-xs font-semibold">
+                                    {splitVariantName(item.productName).variant}
+                                  </span>
+                                ) : null}
                                 <TruncatedText
                                   as="p"
                                   text={item?.sku}
@@ -661,7 +695,8 @@ export default function NewOrderPage() {
                                     onBlur={async (event) => {
                                       await quantityField.onBlur(event);
                                       const fresh = await fetchAvailableStock(
-                                        item.productId
+                                        item.productId,
+                                        item.variantId
                                       );
                                       if (fresh !== null) {
                                         setValue(
@@ -932,6 +967,11 @@ export default function NewOrderPage() {
           </div>
         </div>
       </form>
+      <VariantPickerDialog
+        picker={scanner.picker}
+        onPick={scanner.pickVariant}
+        onClose={scanner.closePicker}
+      />
     </div>
   );
 }

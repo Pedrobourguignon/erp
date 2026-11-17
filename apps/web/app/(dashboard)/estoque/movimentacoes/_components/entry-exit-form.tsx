@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
-import React from "react";
+import React, { useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -27,7 +27,9 @@ import {
 } from "@/hooks/use-inventory";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
 
-import { FieldShell, ProductField, WarehouseField } from "./movement-fields";
+import { FieldShell, WarehouseField } from "./movement-fields";
+import { requireVariant, variantFields } from "./movement-variant";
+import { ProductVariantField } from "./product-variant-field";
 
 const REASONS_BY_TYPE: Record<"ENTRY" | "EXIT", { value: MovementReason; label: string }[]> = {
   ENTRY: [
@@ -63,7 +65,8 @@ const schema = z.object({
     .max(9_999_999, "Custo acima do limite permitido")
     .optional(),
   notes: z.string().max(500, "Observação muito longa").optional(),
-});
+  ...variantFields,
+}).superRefine(requireVariant);
 
 type FormValues = z.infer<typeof schema>;
 
@@ -90,10 +93,16 @@ export function EntryExitForm({ type, onDone }: EntryExitFormProps) {
     defaultValues: { productId: "", warehouseId: "", quantity: 1, reason: "" },
   });
   const onInvalid = useInvalidSubmit();
+  const [productId, variantId] = watch(["productId", "variantId"]);
+  const onHasVariants = useCallback(
+    (has: boolean) => setValue("hasVariants", has, { shouldValidate: false }),
+    [setValue]
+  );
 
   const onSubmit = async (values: FormValues) => {
     const payload: CreateMovementPayload = {
       productId: values.productId,
+      variantId: values.variantId || undefined,
       type: type as MovementType,
       reason: values.reason as MovementReason,
       quantity: values.quantity,
@@ -129,7 +138,17 @@ export function EntryExitForm({ type, onDone }: EntryExitFormProps) {
       {/* AE-26: o corpo rola e o rodapé fica fixo — o dropdown de produto
           cobria os campos de baixo e não havia como alcançá-los. */}
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        <ProductField control={control} name="productId" error={errors.productId?.message} />
+        <ProductVariantField
+          productId={productId}
+          variantId={variantId ?? ""}
+          onChange={(next) => {
+            setValue("productId", next.productId, { shouldValidate: !!next.productId });
+            setValue("variantId", next.variantId, { shouldValidate: !!next.variantId });
+          }}
+          onHasVariantsChange={onHasVariants}
+          productError={errors.productId?.message}
+          variantError={errors.variantId?.message}
+        />
 
         <WarehouseField
           label={type === "ENTRY" ? "Depósito de destino" : "Depósito de origem"}

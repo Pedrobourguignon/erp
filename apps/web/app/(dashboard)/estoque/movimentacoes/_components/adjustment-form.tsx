@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
-import React from "react";
+import React, { useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -24,7 +24,9 @@ import {
 } from "@/hooks/use-inventory";
 import { getMutationErrorMessage } from "@/lib/mutation-error";
 
-import { FieldShell, ProductField, WarehouseField } from "./movement-fields";
+import { FieldShell, WarehouseField } from "./movement-fields";
+import { requireVariant, variantFields } from "./movement-variant";
+import { ProductVariantField } from "./product-variant-field";
 
 const ADJUSTMENT_REASONS = [
   { value: "COUNT", label: "Inventário / contagem" },
@@ -48,7 +50,8 @@ const schema = z.object({
     .string()
     .min(3, "Descreva o motivo do ajuste")
     .max(500, "Justificativa muito longa"),
-});
+  ...variantFields,
+}).superRefine(requireVariant);
 
 type FormValues = z.infer<typeof schema>;
 
@@ -70,7 +73,6 @@ export function AdjustmentForm({ onDone }: { onDone: () => void }) {
     handleSubmit,
     watch,
     setValue,
-    control,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -84,15 +86,24 @@ export function AdjustmentForm({ onDone }: { onDone: () => void }) {
   });
   const onInvalid = useInvalidSubmit();
 
-  const productId = watch("productId");
+  const [productId, variantId] = watch(["productId", "variantId"]);
+  const onHasVariants = useCallback(
+    (has: boolean) => setValue("hasVariants", has, { shouldValidate: false }),
+    [setValue]
+  );
   const warehouseId = watch("warehouseId");
   const countedQuantity = watch("countedQuantity");
 
+  // A listagem não filtra por variação: o saldo é o da linha do tamanho escolhido.
   const { data: itemsResp } = useInventoryItems(
-    productId && warehouseId ? { productId, warehouseId, limit: 1 } : {}
+    productId && warehouseId ? { productId, warehouseId, limit: 100 } : {}
   );
   const currentQuantity =
-    productId && warehouseId ? itemsResp?.data?.[0]?.quantity ?? 0 : null;
+    productId && warehouseId
+      ? (itemsResp?.data ?? []).find(
+          (row) => (row.variantId ?? "") === (variantId ?? "")
+        )?.quantity ?? 0
+      : null;
 
   const delta =
     currentQuantity === null ? null : Number(countedQuantity || 0) - currentQuantity;
@@ -101,6 +112,7 @@ export function AdjustmentForm({ onDone }: { onDone: () => void }) {
     try {
       const result = await adjustStock.mutateAsync({
         productId: values.productId,
+        variantId: values.variantId || undefined,
         warehouseId: values.warehouseId,
         countedQuantity: values.countedQuantity,
         reason: values.reason,
@@ -126,7 +138,17 @@ export function AdjustmentForm({ onDone }: { onDone: () => void }) {
       noValidate
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        <ProductField control={control} name="productId" error={errors.productId?.message} />
+        <ProductVariantField
+          productId={productId}
+          variantId={variantId ?? ""}
+          onChange={(next) => {
+            setValue("productId", next.productId, { shouldValidate: !!next.productId });
+            setValue("variantId", next.variantId, { shouldValidate: !!next.variantId });
+          }}
+          onHasVariantsChange={onHasVariants}
+          productError={errors.productId?.message}
+          variantError={errors.variantId?.message}
+        />
 
         <WarehouseField
           label="Depósito"
