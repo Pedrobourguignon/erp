@@ -19,7 +19,7 @@ import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { usePermissions } from "@/hooks/use-permissions";
-import { NAV_ITEMS, filterNavItems, type NavItem } from "@/lib/nav-items";
+import { NAV_ITEMS, activeChildHref, filterNavItems, type NavItem } from "@/lib/nav-items";
 import { cn } from "@/lib/utils";
 
 // ─── Icons ──────────────────────────────────────────────────────────────
@@ -204,6 +204,7 @@ function NavItemComponent({
 }) {
   const hasChildren = item.children && item.children.length > 0;
   const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+  const activeChild = activeChildHref(item.children ?? [], pathname);
   const Icon = NAV_ICONS[item.icon] ?? BoxIcon;
 
   if (hasChildren && !collapsed) {
@@ -225,7 +226,7 @@ function NavItemComponent({
         </button>
         {isOpen ? <div className="ml-[30px] mt-0.5 space-y-0.5 border-l border-white/[0.06] pl-3">
             {item.children?.map((child) => {
-              const childActive = pathname === child.href || pathname.startsWith(child.href + "/");
+              const childActive = child.href === activeChild;
               return (
                 <Link
                   key={child.href}

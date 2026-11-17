@@ -122,3 +122,19 @@ export function filterNavItems(
     return [{ ...item, children }];
   });
 }
+
+/**
+ * The one child the current page belongs to: the most specific href that is
+ * the page itself or a parent of it. `startsWith` alone marked "Pedidos" on
+ * "/vendas/pedidos/novo" (Nova Venda) and "Geral" on every settings screen.
+ */
+export function activeChildHref(
+  children: ReadonlyArray<Pick<NavChild, "href">>,
+  pathname: string
+): string | null {
+  const matches = children
+    .map((child) => child.href)
+    .filter((href) => pathname === href || pathname.startsWith(`${href}/`));
+  if (matches.length === 0) {return null;}
+  return matches.reduce((best, href) => (href.length > best.length ? href : best));
+}

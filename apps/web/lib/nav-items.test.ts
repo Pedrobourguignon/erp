@@ -1,7 +1,7 @@
 import { getRolePermissions, type PermissionName } from '@erp/constants';
 import { describe, it, expect } from 'vitest';
 
-import { NAV_ITEMS, filterNavItems } from './nav-items';
+import { NAV_ITEMS, activeChildHref, filterNavItems } from './nav-items';
 
 /**
  * AE-27/FN-09: the sidebar showed every module to every role. These tests run
@@ -123,5 +123,32 @@ describe('menu per role', () => {
       expect(hrefs).not.toContain('/vendas/balcao');
       expect(hrefs).not.toContain('/configuracoes/metodos-pagamento');
     });
+  });
+});
+
+// "Nova Venda" (/vendas/pedidos/novo) também acendia "Pedidos", e qualquer
+// tela de configuração acendia "Geral" (/configuracoes): bastava o endereço
+// começar com o link. Só o submenu mais específico fica marcado.
+describe('activeChildHref', () => {
+  const children = (group: string) =>
+    NAV_ITEMS.find((item) => item.title === group)?.children ?? [];
+
+  it.each([
+    ['Vendas', '/vendas/pedidos/novo', '/vendas/pedidos/novo'],
+    ['Vendas', '/vendas/pedidos', '/vendas/pedidos'],
+    ['Vendas', '/vendas/pedidos/abc123', '/vendas/pedidos'],
+    ['Vendas', '/vendas/balcao', '/vendas/balcao'],
+    ['Configurações', '/configuracoes/maquininhas', '/configuracoes/maquininhas'],
+    ['Configurações', '/configuracoes', '/configuracoes'],
+  ])('%s at %s marks only %s', (group, pathname, expected) => {
+    expect(activeChildHref(children(group), pathname)).toBe(expected);
+  });
+
+  it('marks nothing when no child matches', () => {
+    expect(activeChildHref(children('Vendas'), '/clientes')).toBeNull();
+  });
+
+  it('does not match a sibling that only shares a prefix', () => {
+    expect(activeChildHref([{ title: 'A', href: '/vendas/pedidos' }], '/vendas/pedidos-antigos')).toBeNull();
   });
 });
