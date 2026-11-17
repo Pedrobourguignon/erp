@@ -461,3 +461,13 @@ export async function createCardMethod(
 
   return { machine, method };
 }
+
+/**
+ * A valid EAN-13 (with check digit) unique to this run: the API validates the
+ * check digit, and the barcode reader journeys read it back.
+ */
+export function makeEan13(seed: number = Date.now() + Math.floor(Math.random() * 1000)): string {
+  const body = `789${String(seed).slice(-9).padStart(9, "0")}`;
+  const sum = [...body].reduce((acc, digit, i) => acc + Number(digit) * (i % 2 === 0 ? 1 : 3), 0);
+  return body + String((10 - (sum % 10)) % 10);
+}

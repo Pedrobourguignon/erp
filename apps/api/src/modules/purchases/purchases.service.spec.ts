@@ -35,12 +35,19 @@ function createPrisma() {
       // busca por SKU (produto novo) não acha nada; busca por id (vincular) acha
       findFirst: jest
         .fn()
-        .mockImplementation(({ where }: { where: { sku?: string } }) =>
-          Promise.resolve(where.sku ? null : { id: 'p-1' }),
+        .mockImplementation(({ where }: { where: { sku?: string; ean?: string } }) =>
+          Promise.resolve(where.sku || where.ean ? null : { id: 'p-1' }),
         ),
       create: jest.fn().mockResolvedValue({ id: 'p-new' }),
     },
-    productVariant: { findFirst: jest.fn().mockResolvedValue({ id: 'v-1' }) },
+    // a busca por EAN (código já usado?) não acha nada; a por id (vincular) acha
+    productVariant: {
+      findFirst: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { ean?: string } }) =>
+          Promise.resolve(where.ean ? null : { id: 'v-1' }),
+        ),
+    },
     category: { findFirst: jest.fn().mockResolvedValue({ id: 'cat-1' }) },
     brand: { findFirst: jest.fn().mockResolvedValue({ id: 'brand-1' }) },
     goodsReceipt: { create: jest.fn().mockResolvedValue({ id: 'rec-1' }) },
@@ -479,6 +486,16 @@ describe('PurchasesService', () => {
         tx().productVariant.findFirst.mockResolvedValue(null);
 
         await expect(confirm([link(1, 'p-1', { variantId: 'v-x' }), skip(2)])).rejects.toThrow(/variante/i);
+      });
+
+      it('creating a product with an EAN that is already on another product', async () => {
+        tx().product.findFirst.mockImplementation(({ where }: { where: { ean?: string } }) =>
+          Promise.resolve(where.ean ? { name: 'Camiseta Antiga', sku: 'CAM-OLD' } : null),
+        );
+
+        await expect(confirm([skip(1), create(2, { product: { name: 'Nova', sku: 'NOVA-1', salePrice: 10, ean: '7891234567895' } })])).rejects.toThrow(
+          'O código 7891234567895 já está em Camiseta Antiga (CAM-OLD)',
+        );
       });
 
       it('creating a product with a SKU that already exists, in Portuguese', async () => {

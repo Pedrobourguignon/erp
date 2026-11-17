@@ -7,6 +7,7 @@ const TENANT = 'tenant-a';
 function createPrisma() {
   return {
     product: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
+    productVariant: { findFirst: jest.fn().mockResolvedValue(null) },
     customer: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
     accountsPayable: { create: jest.fn().mockResolvedValue({}) },
   } as unknown as PrismaService & {
@@ -46,6 +47,29 @@ describe('ROW_IMPORTERS', () => {
       await expect(
         ROW_IMPORTERS.PRODUCTS(prisma, TENANT, { sku: 'P1', name: 'X', salePrice: 'abc' }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    // Leitor de código de barras: a planilha não pode criar um segundo dono do código.
+    it('refuses an EAN that is already on another product', async () => {
+      prisma.product.findFirst.mockImplementation(async ({ where }: { where: { ean?: string } }) =>
+        where.ean ? { name: 'Boné', sku: 'BON-01' } : null,
+      );
+
+      await expect(
+        ROW_IMPORTERS.PRODUCTS(prisma, TENANT, { sku: 'P1', name: 'Camiseta', salePrice: '10', ean: '7891234567895' }),
+      ).rejects.toThrow('O código 7891234567895 já está em Boné (BON-01)');
+      expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+
+    it('stores the EAN with digits only', async () => {
+      await ROW_IMPORTERS.PRODUCTS(prisma, TENANT, {
+        sku: 'P1',
+        name: 'Camiseta',
+        salePrice: '10',
+        ean: '789.1234.567895',
+      });
+
+      expect(prisma.product.create.mock.calls[0][0].data.ean).toBe('7891234567895');
     });
 
     it('should reject a duplicate SKU', async () => {

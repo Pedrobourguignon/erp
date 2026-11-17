@@ -70,6 +70,7 @@ function createMockPrisma() {
     inventoryItem: {
       aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 0 } }),
     },
+    productVariant: { findFirst: jest.fn().mockResolvedValue(null) },
     orderItem: { count: jest.fn().mockResolvedValue(0) },
     category: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
     stockAlert: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
@@ -312,6 +313,51 @@ describe('ProductsService', () => {
       sku: 'CUSTOM-SKU-001',
     };
 
+    // Leitor de código de barras: um código, um produto (ou uma variação).
+    describe('barcode', () => {
+      const takenBy = (owner: { name: string; sku: string } | null) =>
+        prisma.product.findFirst.mockImplementation(async ({ where }: { where: { ean?: string } }) =>
+          where.ean ? owner : null,
+        );
+
+      it('refuses an EAN already on another product, naming it', async () => {
+        takenBy({ name: 'Boné', sku: 'BON-01' });
+
+        await expect(service.create(TENANT_A, { ...baseDto, ean: '7891234567895' })).rejects.toThrow(
+          new ConflictException('O código 7891234567895 já está em Boné (BON-01)'),
+        );
+        expect(prisma.product.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses the same EAN on two sizes of the new product', async () => {
+        takenBy(null);
+        const variant = { sku: 'X-P', name: 'P', attributes: {} };
+
+        await expect(
+          service.create(TENANT_A, {
+            ...baseDto,
+            variants: [
+              { ...variant, ean: '7891234567895' },
+              { ...variant, sku: 'X-M', name: 'M', ean: '7891234567895' },
+            ],
+          }),
+        ).rejects.toThrow('O código 7891234567895 aparece mais de uma vez neste cadastro');
+      });
+
+      it('stores the EAN of each size with digits only, like the product one', async () => {
+        takenBy(null);
+        prisma.product.create.mockResolvedValue(makeProduct());
+
+        await service.create(TENANT_A, {
+          ...baseDto,
+          variants: [{ sku: 'X-P', name: 'P', attributes: {}, ean: '789.1234.567895' }],
+        });
+
+        const data = prisma.product.create.mock.calls[0][0].data;
+        expect(data.variants.create[0].ean).toBe('7891234567895');
+      });
+    });
+
     // SCRUM-37: the product carries the minimum that seeds each InventoryItem
     it('should persist defaultMinStock', async () => {
       prisma.product.findFirst.mockResolvedValue(null);
@@ -431,6 +477,28 @@ describe('ProductsService', () => {
   // ─── update ───────────────────────────────────────────────────────────────
 
   describe('update', () => {
+    it('checks a new EAN against the other products, not against itself', async () => {
+      prisma.product.findFirst.mockImplementation(async ({ where }: { where: { ean?: string } }) =>
+        where.ean ? null : makeProduct(),
+      );
+      prisma.product.update.mockResolvedValue(makeProduct());
+
+      await service.update(TENANT_A, 'prod-001', { ean: '7891234567895' });
+
+      const eanQuery = prisma.product.findFirst.mock.calls.find(([args]: [{ where: { ean?: string } }]) => args.where.ean);
+      expect(eanQuery[0].where.id).toEqual({ not: 'prod-001' });
+    });
+
+    it('refuses an EAN already on a size of another product', async () => {
+      prisma.product.findFirst.mockResolvedValueOnce(makeProduct()).mockResolvedValue(null);
+      prisma.productVariant.findFirst.mockResolvedValue({ name: 'M', sku: 'CAM-M', product: { name: 'Camiseta' } });
+
+      await expect(service.update(TENANT_A, 'prod-001', { ean: '7891234567895' })).rejects.toThrow(
+        new ConflictException('O código 7891234567895 já está em Camiseta — M (CAM-M)'),
+      );
+      expect(prisma.product.update).not.toHaveBeenCalled();
+    });
+
     it('should update defaultMinStock', async () => {
       prisma.product.findFirst.mockResolvedValue(makeProduct());
       prisma.product.update.mockResolvedValue(makeProduct());

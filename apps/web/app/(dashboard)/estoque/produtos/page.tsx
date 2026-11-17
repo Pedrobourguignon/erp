@@ -17,6 +17,7 @@ import { Can } from "@/components/auth/can";
 import { EntityFilterSelect } from "@/components/forms/entity-filter-select";
 import { ImportCsvDialog } from "@/components/forms/import-csv-dialog";
 import { ListPageHeader } from "@/components/layouts/list-page-header";
+import { BarcodeDuplicatesNotice } from "@/components/products/barcode-duplicates-notice";
 import {
   DataTable,
   type ColumnDef,
@@ -299,6 +300,9 @@ export default function ProductsListPage() {
           </>
         }
       />
+
+      {/* Leitor do balcão: código em dois cadastros trava a leitura. */}
+      <BarcodeDuplicatesNotice />
 
       <ImportCsvDialog
         open={importOpen}

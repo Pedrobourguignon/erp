@@ -9,6 +9,7 @@ import {
 import { isEmail } from 'class-validator';
 import { ImportType } from '@prisma/client';
 import { PrismaService } from '../../database/prisma/prisma.service';
+import { assertBarcodesFree } from '../../common/barcodes/barcode-uniqueness';
 import { CsvRow } from './csv-parser';
 
 export type RowImporter = (
@@ -74,6 +75,10 @@ const importProduct: RowImporter = async (prisma, tenantId, row) => {
     throw new BadRequestException(`Já existe um produto com o SKU ${sku}`);
   }
 
+  // Leitor de código de barras: a planilha não cria um segundo dono do código.
+  const ean = onlyDigits(row.ean) || null;
+  await assertBarcodesFree(prisma, tenantId, [ean]);
+
   await prisma.product.create({
     data: {
       tenantId,
@@ -83,7 +88,7 @@ const importProduct: RowImporter = async (prisma, tenantId, row) => {
       costPrice,
       description: row.description || null,
       ncm: row.ncm || null,
-      ean: row.ean || null,
+      ean,
       status: 'ACTIVE',
     },
   });

@@ -252,6 +252,8 @@ export interface Warehouse {
 export interface InventoryItem {
   id: string;
   productId: string;
+  /** Linha de um tamanho/cor; null no produto sem variações. */
+  variantId: string | null;
   warehouseId: string;
   quantity: number;
   reserved: number;
@@ -373,4 +375,36 @@ export interface ExchangeReceipt extends ReceiptHeader {
   /** Parte da devolução abatida de parcelas em aberto do pedido. */
   abatedAmount: number;
   reason: string | null;
+}
+
+// ─── Leitura de código de barras (busca exata) ─────────────────────────
+
+/** O que entra no carrinho: um produto simples ou uma variação. */
+export interface SaleCandidate {
+  productId: string;
+  variantId: string | null;
+  /** "Camiseta Básica — M" na variação. */
+  name: string;
+  sku: string;
+  ean: string | null;
+  /** Preço da variação quando ela tem, senão o do produto. */
+  salePrice: number;
+  /** Disponível somando os depósitos (da variação, quando houver). */
+  available: number;
+}
+
+/**
+ * Resposta de `GET /products/lookup`. Um produto com variações lido pelo
+ * código do pai não decide sozinho o tamanho/cor: a tela pergunta.
+ */
+export type ProductLookupResult =
+  | { kind: 'MATCH'; item: SaleCandidate }
+  | { kind: 'CHOOSE_VARIANT'; productId: string; productName: string; variants: SaleCandidate[] }
+  /** Etiqueta desconhecida: resultado normal da leitura, não um erro HTTP. */
+  | { kind: 'NOT_FOUND'; code: string; message: string };
+
+/** `GET /products/barcode-duplicates`: um código cadastrado em mais de um lugar. */
+export interface BarcodeDuplicate {
+  ean: string;
+  owners: { productId: string; variantId: string | null; name: string; sku: string }[];
 }

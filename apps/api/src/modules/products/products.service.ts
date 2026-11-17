@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { assertBarcodesFree } from '../../common/barcodes/barcode-uniqueness';
 import { PrismaService } from '../../database/prisma/prisma.service';
 import {
   CreateProductDto,
@@ -182,6 +183,13 @@ export class ProductsService {
       throw new ConflictException(`Já existe um produto com o SKU "${sku}"`);
     }
 
+    // The barcode reader looks codes up by equality: one code, one product
+    // (or one size/colour) — the product's and its variants' together.
+    await assertBarcodesFree(this.prisma, tenantId, [
+      dto.ean,
+      ...(dto.variants ?? []).map((v) => v.ean),
+    ]);
+
     // Calculate sale price from cost + markup if not provided
     let salePrice = dto.salePrice;
     if (!salePrice && dto.markup != null && dto.costPrice > 0) {
@@ -243,7 +251,8 @@ export class ProductsService {
               create: dto.variants.map((v) => ({
                 sku: v.sku,
                 name: v.name,
-                ean: v.ean,
+                // Só dígitos, como o EAN do produto (AE-08).
+                ean: normalizeFiscalCode(v.ean),
                 costPrice: v.costPrice,
                 salePrice: v.salePrice,
                 attributes: v.attributes as any,
@@ -285,6 +294,10 @@ export class ProductsService {
       if (skuExists) {
         throw new ConflictException(`Já existe um produto com o SKU "${dto.sku}"`);
       }
+    }
+
+    if (dto.ean) {
+      await assertBarcodesFree(this.prisma, tenantId, [dto.ean], { productId: id });
     }
 
     // Recalculate sale price if markup changed

@@ -29,6 +29,7 @@ import {
   type ItemMatch,
   type KnownCode,
 } from './nfe/product-matcher';
+import { assertBarcodesFree } from '../../common/barcodes/barcode-uniqueness';
 
 const FINANCIAL_PERMISSION = 'financial:create';
 
@@ -531,6 +532,9 @@ export class PurchasesService {
     if (taken) {
       throw new ConflictException(`Já existe um produto com o SKU "${input.sku}".`);
     }
+    // O produto novo não pode nascer com o código de barras de outro: o
+    // leitor do balcão passaria a não saber qual dos dois vender.
+    await assertBarcodesFree(tx, tenantId, [digitsOrNull(input.ean) ?? item.ean]);
     if (input.categoryId) await this.assertOwned(tx.category, input.categoryId, tenantId, 'Categoria');
     if (input.brandId) await this.assertOwned(tx.brand, input.brandId, tenantId, 'Marca');
 
