@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+
 import {
   test,
   expect,
@@ -29,6 +31,20 @@ function dayKey(daysFromToday: number): { iso: string; br: string } {
 }
 
 type Receivable = { amount: string; installment: number; totalInstallments: number };
+
+/** The table row with `text`, paging forward through the list until it shows up. */
+async function findRow(page: Page, text: string) {
+  const row = page.getByRole("row").filter({ hasText: text }).first();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (await row.isVisible()) {return row;}
+    const next = page.getByRole("button", { name: "Próxima página" });
+    if (!(await next.isVisible()) || !(await next.isEnabled())) {break;}
+    await next.click();
+    await page.waitForLoadState("networkidle");
+  }
+  await expect(row).toBeVisible();
+  return row;
+}
 
 test.describe("maquininhas", () => {
   test("cadastrar pela tela, vincular ao crédito e vender 3x gera 3 títulos e 3 taxas", async ({
@@ -112,22 +128,21 @@ test.describe("maquininhas", () => {
     // 4. No Financeiro: o 1º título vence em 30 dias e a taxa dele (4,99% de
     //    R$ 300 = R$ 14,97, um terço por parcela) vence no mesmo dia.
     const due = dayKey(30);
-    await appPage.goto("/financeiro/lancamentos");
-    await appPage.getByLabel("De", { exact: true }).fill(due.iso);
-    await appPage.getByLabel("Até", { exact: true }).fill(due.iso);
+    const openDay = async () => {
+      await appPage.goto("/financeiro/lancamentos");
+      await appPage.getByLabel("De", { exact: true }).fill(due.iso);
+      await appPage.getByLabel("Até", { exact: true }).fill(due.iso);
+      await appPage.waitForLoadState("networkidle");
+    };
+    await openDay();
 
-    const first = appPage
-      .getByRole("row")
-      .filter({ hasText: `${order.orderNumber} - ${methodName} (1/3)` })
-      .first();
-    await expect(first).toBeVisible();
+    // As rodadas da suíte acumulam títulos no mesmo vencimento: o desta venda
+    // pode estar numa página adiante.
+    const first = await findRow(appPage, `${order.orderNumber} - ${methodName} (1/3)`);
     await expect(first).toContainText(due.br);
 
-    const fee = appPage
-      .getByRole("row")
-      .filter({ hasText: `Taxa ${methodName} - ${order.orderNumber} (1/3)` })
-      .first();
-    await expect(fee).toBeVisible();
+    await openDay();
+    const fee = await findRow(appPage, `Taxa ${methodName} - ${order.orderNumber} (1/3)`);
     await expect(fee).toContainText("4,99");
   });
 

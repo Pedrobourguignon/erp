@@ -33,10 +33,15 @@ async function skusReais(
   apiClient: { get: (path: string) => Promise<{ body: unknown }> },
   quantos: number
 ) {
-  const { body } = await apiClient.get(
-    `/products?limit=${quantos}&status=ACTIVE`
-  );
-  return ((body as { data?: { sku: string }[] }).data ?? []).map((p) => p.sku);
+  // Produto com variante não se bipa pelo SKU do pai: as jornadas de troca
+  // criam vários, e "os primeiros ativos" passavam a ser só eles.
+  const { body } = await apiClient.get(`/products?limit=50&status=ACTIVE`);
+  const products =
+    (body as { data?: { sku: string; _count?: { variants?: number } }[] }).data ?? [];
+  return products
+    .filter((p) => Number(p._count?.variants ?? 0) === 0)
+    .slice(0, quantos)
+    .map((p) => p.sku);
 }
 
 test.describe("balcão: seletor de produtos", () => {
