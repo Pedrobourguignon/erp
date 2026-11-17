@@ -48,6 +48,8 @@ interface MoneyInputProps<TFieldValues extends FieldValues> {
   error?: string;
   /** Allows a leading minus sign. Off by default — prices are never negative. */
   allowNegative?: boolean;
+  /** For an external `<label htmlFor>` when the label lives outside. */
+  id?: string;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────
@@ -61,6 +63,7 @@ export function MoneyInput<TFieldValues extends FieldValues>({
   className,
   error,
   allowNegative = false,
+  id,
 }: MoneyInputProps<TFieldValues>) {
   const {
     field,
@@ -105,7 +108,8 @@ export function MoneyInput<TFieldValues extends FieldValues>({
   );
 
   const errorMessage = error ?? fieldError?.message;
-  const inputId = useId();
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
 
   return (
     <div className={cn("space-y-1", className)}>

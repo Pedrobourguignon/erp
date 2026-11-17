@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, CreditCard } from "lucide-react";
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import {
   useFieldArray,
   useWatch,
@@ -83,10 +83,19 @@ export function PaymentSelector({
 
   const settlement = settlePayments(drafts, totalAmount);
 
-  // Auto-sync amount when single payment line. VD-08: a cash line above the
-  // total is the seller typing what the customer handed over — forcing it back
-  // to the total is what erased the change.
+  // Auto-sync amount when single payment line — but only when the cart total
+  // or the number of lines changes, never in reaction to the seller typing.
+  // Reacting to every keystroke pulled any value below the total straight back
+  // to the total, so "Valor Recebido" could only grow by appending digits
+  // (R$ 100,00 → R$ 1.000,00). VD-08: a cash line above the total is the
+  // customer's change and is never pulled back.
+  const synced = useRef<{ total: number; lines: number } | null>(null);
   useEffect(() => {
+    const previous = synced.current;
+    synced.current = { total: totalAmount, lines: fields.length };
+    if (previous && previous.total === totalAmount && previous.lines === fields.length) {
+      return;
+    }
     if (fields.length !== 1 || totalAmount <= 0) {
       return;
     }

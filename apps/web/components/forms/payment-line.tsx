@@ -268,10 +268,10 @@ export function PaymentLine({
 
       {/* Amount */}
       <div className="w-full space-y-1 sm:w-40">
-        <label className="text-xs font-medium text-muted-foreground">
+        <label htmlFor={`payment-${index}-amount`} className="text-xs font-medium text-muted-foreground">
           {selectedMethodType === "CASH" ? "Valor Recebido" : "Valor"}
         </label>
-        <MoneyInput name={`payments.${index}.amount`} control={control} />
+        <MoneyInput id={`payment-${index}-amount`} name={`payments.${index}.amount`} control={control} />
       </div>
 
       {/* Remove */}
