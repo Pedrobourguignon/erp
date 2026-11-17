@@ -332,6 +332,8 @@ model Tenant {
   categories             Category[]
   brands                 Brand[]
   suppliers              Supplier[]
+  goodsReceipts          GoodsReceipt[]
+  supplierProductCodes   SupplierProductCode[]
   warehouses             Warehouse[]
   orders                 Order[]
   quotations             Quotation[]
@@ -554,6 +556,8 @@ model Supplier {
   products        Product[]
   purchaseOrders  PurchaseOrder[]
   contacts        SupplierContact[]
+  goodsReceipts   GoodsReceipt[]
+  productCodes    SupplierProductCode[]
   accountsPayable AccountsPayable[]
 
   @@index([tenantId])
@@ -598,8 +602,12 @@ model Product {
   cfop String? @db.VarChar(4)
 
   // Preços
+  /// Custo médio ponderado do estoque, atualizado a cada entrada (ADR 0004).
   costPrice  Decimal  @default(0) @db.Decimal(15, 4)
   salePrice  Decimal  @default(0) @db.Decimal(15, 4)
+  /// Custo unitário da última compra (nota/entrada de compra) e quando foi.
+  lastPurchaseCost Decimal?  @db.Decimal(15, 4)
+  lastPurchaseAt   DateTime?
   promoPrice Decimal? @db.Decimal(15, 4)
   markup     Decimal? @db.Decimal(10, 4)
 
@@ -633,6 +641,8 @@ model Product {
   deletedAt DateTime?
 
   variants            ProductVariant[]
+  receiptItems        GoodsReceiptItem[]
+  supplierCodes       SupplierProductCode[]
   images              ProductImage[]
   inventoryItems      InventoryItem[]
   inventoryMovements  InventoryMovement[]
@@ -722,6 +732,7 @@ model Warehouse {
   updatedAt DateTime @updatedAt
 
   inventoryItems InventoryItem[]
+  goodsReceipts  GoodsReceipt[]
   movementsFrom  InventoryMovement[] @relation("MovementFrom")
   movementsTo    InventoryMovement[] @relation("MovementTo")
   stockAlerts    StockAlert[]
@@ -1977,4 +1988,78 @@ model ImportJob {
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@map("import_jobs")
+}
+
+/// Nota fiscal de compra que deu entrada no estoque (ADR 0004).
+///
+/// A chave de acesso é única por empresa: a mesma nota não dá entrada duas vezes.
+model GoodsReceipt {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  accessKey  String // 44 dígitos
+  number     String
+  series     String
+  issuedDate DateTime // data civil: meia-noite no fuso do lojista
+
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  totalAmount Decimal @db.Decimal(15, 2) // vNF
+  createdById String
+  createdAt   DateTime @default(now())
+
+  items GoodsReceiptItem[]
+
+  @@unique([tenantId, accessKey])
+  @@index([tenantId, supplierId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id        String       @id @default(cuid())
+  receiptId String
+  receipt   GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  variantId String?
+
+  line         Int
+  supplierCode String
+  description  String
+  quantity     Int
+  unitCost     Decimal @db.Decimal(15, 4) // custo de aquisição por unidade
+  totalCost    Decimal @db.Decimal(15, 2)
+  createdProduct Boolean @default(false) // o produto nasceu nesta nota
+
+  @@index([receiptId])
+  @@index([productId])
+  @@map("goods_receipt_items")
+}
+
+/// O código que um fornecedor usa para um produto — lembrado para que a próxima
+/// nota dele case sozinha.
+model SupplierProductCode {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  supplierCode String
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, supplierId, supplierCode])
+  @@index([productId])
+  @@map("supplier_product_codes")
 }

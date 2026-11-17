@@ -342,83 +342,13 @@ export class InventoryService {
       throw new NotFoundException('Produto não encontrado');
     }
 
-    const totalCost = dto.unitCost
-      ? dto.unitCost * dto.quantity
-      : undefined;
+    const movement = await this.prisma.$transaction((tx) =>
+      this.applyMovement(tx, tenantId, userId, dto),
+    );
 
-    const movement = await this.prisma.$transaction(async (tx) => {
-      // Create the movement record
-      const created = await tx.inventoryMovement.create({
-        data: {
-          tenantId,
-          productId: dto.productId,
-          variantId: dto.variantId,
-          type: dto.type as MovementType,
-          reason: dto.reason as MovementReason,
-          quantity: dto.quantity,
-          unitCost: dto.unitCost,
-          totalCost,
-          fromWarehouseId: dto.fromWarehouseId,
-          toWarehouseId: dto.toWarehouseId,
-          referenceType: dto.referenceType,
-          referenceId: dto.referenceId,
-          notes: dto.notes,
-          userId,
-        },
-      });
-
-      // Update inventory based on movement type
-      if (dto.type === 'ENTRY' || dto.type === 'RETURN' || dto.type === 'PRODUCTION') {
-        if (!dto.toWarehouseId) {
-          throw new BadRequestException('Informe o depósito de destino para movimentações de entrada, devolução ou produção');
-        }
-        await this.upsertInventoryItem(
-          tx,
-          tenantId,
-          dto.productId,
-          dto.variantId ?? null,
-          dto.toWarehouseId,
-          dto.quantity,
-          dto.unitCost,
-        );
-      } else if (dto.type === 'EXIT') {
-        if (!dto.fromWarehouseId) {
-          throw new BadRequestException('Informe o depósito de origem para movimentações de saída');
-        }
-        await this.upsertInventoryItem(
-          tx,
-          tenantId,
-          dto.productId,
-          dto.variantId ?? null,
-          dto.fromWarehouseId,
-          -dto.quantity,
-        );
-      } else if (dto.type === 'ADJUSTMENT') {
-        // Adjustment can be positive or negative; use toWarehouseId or fromWarehouseId
-        const warehouseId = dto.toWarehouseId || dto.fromWarehouseId;
-        if (!warehouseId) {
-          throw new BadRequestException('Informe o depósito para registrar o ajuste');
-        }
-        // For adjustments, positive quantity = add, we decide based on which warehouse is given
-        const delta = dto.toWarehouseId ? dto.quantity : -dto.quantity;
-        await this.upsertInventoryItem(
-          tx,
-          tenantId,
-          dto.productId,
-          dto.variantId ?? null,
-          warehouseId,
-          delta,
-          dto.unitCost,
-        );
-      }
-      // TRANSFER is handled via transferStock method
-
-      this.logger.log(
-        `Inventory movement: ${dto.type} ${dto.quantity}x ${product.sku} (tenant: ${tenantId})`,
-      );
-
-      return created;
-    });
+    this.logger.log(
+      `Inventory movement: ${dto.type} ${dto.quantity}x ${product.sku} (tenant: ${tenantId})`,
+    );
 
     // Check low stock alerts after movement completes
     const affectedWarehouseId = dto.toWarehouseId || dto.fromWarehouseId;
@@ -432,6 +362,116 @@ export class InventoryService {
     }
 
     return movement;
+  }
+
+  /**
+   * Aplica UMA movimentação dentro de uma transação que o chamador já abriu.
+   *
+   * É o que `createMovement` faz, exposto para quem precisa dar entrada em vários
+   * itens de uma vez com tudo-ou-nada (a nota fiscal de compra). Não valida o
+   * produto nem confere alertas: o chamador faz as duas coisas.
+   */
+  async applyMovement(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    userId: string,
+    dto: CreateMovementDto,
+  ) {
+    const totalCost = dto.unitCost
+      ? dto.unitCost * dto.quantity
+      : undefined;
+
+    // Create the movement record
+    const created = await tx.inventoryMovement.create({
+      data: {
+        tenantId,
+        productId: dto.productId,
+        variantId: dto.variantId,
+        type: dto.type as MovementType,
+        reason: dto.reason as MovementReason,
+        quantity: dto.quantity,
+        unitCost: dto.unitCost,
+        totalCost,
+        fromWarehouseId: dto.fromWarehouseId,
+        toWarehouseId: dto.toWarehouseId,
+        referenceType: dto.referenceType,
+        referenceId: dto.referenceId,
+        notes: dto.notes,
+        userId,
+      },
+    });
+
+    // Update inventory based on movement type
+    if (dto.type === 'ENTRY' || dto.type === 'RETURN' || dto.type === 'PRODUCTION') {
+      if (!dto.toWarehouseId) {
+        throw new BadRequestException('Informe o depósito de destino para movimentações de entrada, devolução ou produção');
+      }
+      await this.upsertInventoryItem(
+        tx,
+        tenantId,
+        dto.productId,
+        dto.variantId ?? null,
+        dto.toWarehouseId,
+        dto.quantity,
+        dto.unitCost,
+      );
+    } else if (dto.type === 'EXIT') {
+      if (!dto.fromWarehouseId) {
+        throw new BadRequestException('Informe o depósito de origem para movimentações de saída');
+      }
+      await this.upsertInventoryItem(
+        tx,
+        tenantId,
+        dto.productId,
+        dto.variantId ?? null,
+        dto.fromWarehouseId,
+        -dto.quantity,
+      );
+    } else if (dto.type === 'ADJUSTMENT') {
+      // Adjustment can be positive or negative; use toWarehouseId or fromWarehouseId
+      const warehouseId = dto.toWarehouseId || dto.fromWarehouseId;
+      if (!warehouseId) {
+        throw new BadRequestException('Informe o depósito para registrar o ajuste');
+      }
+      // For adjustments, positive quantity = add, we decide based on which warehouse is given
+      const delta = dto.toWarehouseId ? dto.quantity : -dto.quantity;
+      await this.upsertInventoryItem(
+        tx,
+        tenantId,
+        dto.productId,
+        dto.variantId ?? null,
+        warehouseId,
+        delta,
+        dto.unitCost,
+      );
+    }
+    // TRANSFER is handled via transferStock method
+
+
+    // Entradas reprecificam o saldo: o custo de cadastro acompanha a média e a
+    // compra registra o último custo (ADR 0004).
+    if (dto.type !== 'EXIT' && dto.type !== 'TRANSFER') {
+      await this.syncProductCost(
+        tx,
+        tenantId,
+        dto.productId,
+        dto.type === 'ENTRY' && dto.reason === 'PURCHASE' && dto.unitCost != null
+          ? dto.unitCost
+          : undefined,
+      );
+    }
+
+    return created;
+  }
+
+  /** Reconfere os alertas de estoque mínimo de um item, depois da transação. */
+  async refreshAlerts(
+    tenantId: string,
+    productId: string,
+    variantId: string | null,
+    warehouseId: string,
+  ): Promise<void> {
+    await this.checkAndUpdateAlerts(tenantId, productId, variantId, warehouseId);
   }
 
   /**
@@ -655,7 +695,7 @@ export class InventoryService {
 
     const movement = await this.prisma.$transaction(async (tx) => {
       // Decrease source
-      await this.upsertInventoryItem(
+      const sourceCost = await this.upsertInventoryItem(
         tx,
         tenantId,
         dto.productId,
@@ -664,7 +704,9 @@ export class InventoryService {
         -dto.quantity,
       );
 
-      // Increase destination
+      // Increase destination — com o custo médio da origem: uma transferência
+      // move mercadoria, não a recompra pelo custo de cadastro. Origem sem custo
+      // gravado (saldo antigo) cai no custo de cadastro, como antes.
       await this.upsertInventoryItem(
         tx,
         tenantId,
@@ -672,6 +714,7 @@ export class InventoryService {
         dto.variantId ?? null,
         dto.toWarehouseId,
         dto.quantity,
+        sourceCost > 0 ? sourceCost : undefined,
       );
 
       // Create movement record
@@ -1144,7 +1187,7 @@ export class InventoryService {
      * melhor um custo de cadastro do que a coluna zerada para sempre.
      */
     unitCost?: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const existing = await tx.inventoryItem.findFirst({
       where: {
         productId,
@@ -1154,6 +1197,9 @@ export class InventoryService {
     });
 
     if (existing) {
+      // O custo médio do saldo antes desta movimentação — é o que uma
+      // transferência leva do depósito de origem.
+      const previousCost = Number(existing.costAverage ?? 0);
       const newQuantity = existing.quantity + delta;
       if (newQuantity < 0) {
         throw await this.insufficientStockError(tx, {
@@ -1176,16 +1222,21 @@ export class InventoryService {
                   currentQuantity: existing.quantity,
                   currentAverage: existing.costAverage,
                   inboundQuantity: delta,
-                  inboundUnitCost: await this.resolveEntryCost(
-                    tx,
-                    productId,
-                    unitCost,
-                  ),
+                  // Sem custo informado, a entrada entra pelo custo médio do
+                  // próprio saldo — não dilui a média com o custo de cadastro.
+                  // Só um depósito sem saldo parte do custo de cadastro.
+                  inboundUnitCost:
+                    unitCost !== undefined && unitCost !== null
+                      ? unitCost
+                      : existing.quantity > 0
+                        ? previousCost
+                        : await this.resolveEntryCost(tx, productId),
                 }),
               }
             : {}),
         },
       });
+      return previousCost;
     } else {
       if (delta < 0) {
         const warehouse = await tx.warehouse.findUnique({
@@ -1206,6 +1257,9 @@ export class InventoryService {
         select: { defaultMinStock: true, costPrice: true },
       });
 
+      // Primeira entrada: o custo do saldo é o custo dela (ou o de cadastro).
+      const createdCost = unitCost ?? Number(product?.costPrice ?? 0);
+
       await tx.inventoryItem.create({
         data: {
           tenantId,
@@ -1216,13 +1270,47 @@ export class InventoryService {
           available: delta,
           reserved: 0,
           minStock: product?.defaultMinStock ?? 0,
-          // Primeira entrada: o custo do saldo é o custo dela.
-          costAverage: new Prisma.Decimal(
-            unitCost ?? Number(product?.costPrice ?? 0),
-          ),
+          costAverage: new Prisma.Decimal(createdCost),
         },
       });
+      return createdCost;
     }
+  }
+
+  /**
+   * O custo de cadastro do produto acompanha a média ponderada do estoque
+   * (ADR 0004), somando todos os depósitos e variantes com saldo. Sem saldo, o
+   * último custo fica como está. Uma compra também registra o último custo pago.
+   */
+  private async syncProductCost(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    productId: string,
+    purchaseCost?: number,
+  ): Promise<void> {
+    const items = await tx.inventoryItem.findMany({
+      where: { tenantId, productId, quantity: { gt: 0 } },
+      select: { quantity: true, costAverage: true },
+    });
+
+    const data: Prisma.ProductUpdateInput = {};
+    const totalQuantity = items.reduce((sum, i) => sum + i.quantity, 0);
+    if (totalQuantity > 0) {
+      const totalValue = items.reduce(
+        (sum, i) => sum.add(new Prisma.Decimal(i.costAverage ?? 0).mul(i.quantity)),
+        new Prisma.Decimal(0),
+      );
+      data.costPrice = totalValue.div(totalQuantity).toDecimalPlaces(4);
+    }
+    if (purchaseCost !== undefined) {
+      data.lastPurchaseCost = new Prisma.Decimal(purchaseCost);
+      data.lastPurchaseAt = new Date();
+    }
+    if (Object.keys(data).length === 0) {
+      return;
+    }
+
+    await tx.product.update({ where: { id: productId }, data });
   }
 
   /**

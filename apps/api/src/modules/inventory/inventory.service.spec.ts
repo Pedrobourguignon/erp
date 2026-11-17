@@ -67,6 +67,8 @@ function createMockPrisma() {
       findUnique: jest
         .fn()
         .mockResolvedValue({ defaultMinStock: 0, name: 'Widget A', sku: 'SKU-001' }),
+      // ADR 0004: toda entrada reprecifica o custo de cadastro do produto.
+      update: jest.fn().mockResolvedValue({}),
     },
     // AE-12a: as mensagens de estoque dizem o depósito, então precisam lê-lo.
     warehouse: {
@@ -78,7 +80,7 @@ function createMockPrisma() {
     inventoryItem: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),
       update: jest.fn(),
       count: jest.fn(),
